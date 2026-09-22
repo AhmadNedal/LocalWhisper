@@ -131,12 +131,18 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/system")
     def system() -> dict[str, object]:
         devices = detect_devices()
+        # large-v3 needs ~5.5 GB of VRAM; smaller GPUs get large-v3-turbo (~3.5 GB).
+        gpu_default = (
+            DEFAULT_MODEL_GPU
+            if devices.gpu_vram_mb is None or devices.gpu_vram_mb >= 6000
+            else DEFAULT_MODEL_CPU
+        )
         return {
             "version": __version__,
             "devices": devices.to_dict(),
             "ffmpegAvailable": bool(settings.ffmpeg_path),
-            "defaultModel": DEFAULT_MODEL_GPU if devices.gpu_recommended else DEFAULT_MODEL_CPU,
-            "defaultModelGpu": DEFAULT_MODEL_GPU,
+            "defaultModel": gpu_default if devices.gpu_recommended else DEFAULT_MODEL_CPU,
+            "defaultModelGpu": gpu_default,
             "defaultModelCpu": DEFAULT_MODEL_CPU,
             "modelsDir": str(settings.models_dir),
             "outputDir": str(settings.output_dir),
