@@ -1,0 +1,16 @@
+node_modules/
+.next/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+*.tsbuildinfo
+backend/.venv/
+backend/dist/
+backend/build/
+__pycache__/
+*.pyc
+models/*
+!models/.gitkeep
+!models/README.md
+release/
+.env*

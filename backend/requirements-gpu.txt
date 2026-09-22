@@ -1,0 +1,6 @@
+# NVIDIA runtime libraries for GPU transcription (CUDA 12 + cuDNN 9), as
+# required by CTranslate2 >= 4.5. Installed automatically by `npm install`
+# when an NVIDIA driver is detected, or manually with `npm run setup:gpu`.
+# These are NVIDIA's official redistributable wheels; no CUDA Toolkit install needed.
+nvidia-cublas-cu12>=12.4,<13
+nvidia-cudnn-cu12>=9.1,<10

@@ -1,0 +1,16 @@
+# Core transcription engine (pulls in CTranslate2, PyAV, onnxruntime for Silero VAD,
+# tokenizers and huggingface_hub for the one-time model download).
+faster-whisper>=1.2.0,<2
+ctranslate2>=4.5.0,<5
+
+# Local HTTP API (bound to 127.0.0.1 only)
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+
+# PDF export with real Arabic shaping (HarfBuzz) and bidi support
+fpdf2>=2.8.0,<3
+uharfbuzz>=0.40
+
+# RAM / CPU detection and parent-process watchdog
+psutil>=5.9
+numpy>=1.24

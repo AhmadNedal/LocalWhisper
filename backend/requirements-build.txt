@@ -1,0 +1,2 @@
+# Only needed to package the backend into a standalone .exe (`npm run dist`).
+pyinstaller>=6.6
