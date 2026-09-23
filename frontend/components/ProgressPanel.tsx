@@ -13,15 +13,22 @@ interface Props {
   canStart: boolean;
   cancelling: boolean;
   generatingPdf: boolean;
+  isYoutube: boolean;
+  /** Status shown when no job has run (e.g. captions were loaded from YouTube). */
+  readyNote?: string | null;
   onStart: () => void;
   onCancel: () => void;
 }
 
-const STEPS: Stage[] = ["extracting_audio", "downloading_model", "loading_model", "transcribing", "finalizing"];
+const STEPS: Stage[] = ["downloading_media", "extracting_audio", "downloading_model", "loading_model", "transcribing", "finalizing"];
 
-function stepState(step: Stage, job: JobSnapshot): "done" | "active" | "pending" | "skipped" {
+function stepState(step: Stage, job: JobSnapshot, isYoutube: boolean): "done" | "active" | "pending" | "skipped" {
+  if (step === "downloading_media" && !isYoutube) return "skipped";
   if (job.status === "completed") return step === "downloading_model" && !job.download ? "skipped" : "done";
-  const order: Stage[] = ["queued", "probing", ...STEPS];
+  // YouTube jobs download first, then probe the downloaded file.
+  const order: Stage[] = isYoutube
+    ? ["queued", "downloading_media", "probing", ...STEPS.slice(1)]
+    : ["queued", "probing", ...STEPS];
   const current = order.indexOf(job.stage);
   const index = order.indexOf(step);
   if (index < current) return step === "downloading_model" && !job.download ? "skipped" : "done";
@@ -29,14 +36,25 @@ function stepState(step: Stage, job: JobSnapshot): "done" | "active" | "pending"
   return "pending";
 }
 
-export function ProgressPanel({ t, lang, job, canStart, cancelling, generatingPdf, onStart, onCancel }: Props) {
+export function ProgressPanel({
+  t,
+  lang,
+  job,
+  canStart,
+  cancelling,
+  generatingPdf,
+  isYoutube,
+  readyNote,
+  onStart,
+  onCancel,
+}: Props) {
   const running = job?.status === "running";
   const pct = Math.round((job?.progress ?? 0) * 100);
   const stageLabel = generatingPdf
     ? t.stage_generating_pdf
     : job
       ? (t[`stage_${job.stage}` as keyof Strings] ?? job.stage)
-      : t.idle;
+      : (readyNote ?? t.idle);
   const gpuFallback = job?.warnings.some((w) => w.startsWith("gpu_fallback"));
   const gpuTooSmall = job?.warnings.includes("gpu_too_small");
   const lowMemory = job?.warnings.includes("low_memory");
@@ -56,7 +74,7 @@ export function ProgressPanel({ t, lang, job, canStart, cancelling, generatingPd
       </div>
 
       <div className="status-line" aria-live="polite">
-        <span className={`status-dot ${job?.status ?? "idle"} ${generatingPdf ? "running" : ""}`} />
+        <span className={`status-dot ${job?.status ?? (readyNote ? "completed" : "idle")} ${generatingPdf ? "running" : ""}`} />
         <span className="status-text">{stageLabel}</span>
         {job ? (
           <span className="status-pct" dir="ltr">
@@ -81,14 +99,14 @@ export function ProgressPanel({ t, lang, job, canStart, cancelling, generatingPd
           {job.status === "running" || job.status === "completed" ? (
           <ol className="steps">
             {STEPS.map((step) => {
-              const state = stepState(step, job);
+              const state = stepState(step, job, isYoutube);
               if (state === "skipped") return null;
               const active = state === "active";
               return (
                 <li key={step} className={`step ${state}`}>
                   <span className="step-mark">{state === "done" ? <CheckIcon size={12} /> : null}</span>
                   <span className="step-label">{t[`stage_${step}` as keyof Strings]}</span>
-                  {active && step === "downloading_model" && job.download ? (
+                  {active && (step === "downloading_model" || step === "downloading_media") && job.download ? (
                     <span className="step-extra" dir="ltr">
                       {formatBytes(job.download.done)} / {formatBytes(job.download.total)}
                     </span>

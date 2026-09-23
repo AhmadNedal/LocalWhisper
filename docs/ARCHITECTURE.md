@@ -35,7 +35,7 @@ This document explains how Local Transcriber works internally. For installation 
 - Electron generates a **random token on every launch** and passes it to both processes. Every request must carry it in the `X-Auth-Token` header, so other programs or web pages on the same PC cannot use the backend.
 - The UI sends **file paths, not file bytes**. Media never passes through the UI and is never uploaded.
 - The renderer runs with `contextIsolation`, `sandbox` and no Node integration. The only native features it can use are the ones exposed by `electron/preload.js` (`window.desktop`).
-- Hugging Face and Next.js telemetry are disabled. The only network request is the one-time model download.
+- Hugging Face and Next.js telemetry are disabled. Network requests: the one-time model download, and YouTube — only when the user pastes a link.
 
 ## Transcription pipeline
 
@@ -88,6 +88,14 @@ Cancellation is cooperative (checked between segments) and kills FFmpeg immediat
 - **Font:** Amiri (covers Arabic and Latin) is embedded, so there are no empty boxes.
 - **Layout:** two-pass layout so the footer can show "page X of Y" in Arabic. The file is written atomically (`.part` then rename).
 
+## YouTube
+
+`backend/app/youtube.py` uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). YouTube requires a JavaScript runtime for full support; the `deno` pip package provides it (bundled into the installer under `_internal/deno/`), together with `yt-dlp-ejs`.
+
+- `inspect` lists caption tracks: channel-uploaded (`subtitles`) and YouTube's original-language speech recognition (`automatic_captions` `*-orig`); machine-translated auto tracks are skipped.
+- `fetch_subtitles` downloads the json3 track (millisecond timings; VTT fallback), clamps overlapping auto-caption events and merges 1–3-word events into readable segments.
+- Without captions, the job gets a `downloading_media` stage: only the best **audio** stream is downloaded into the job's temp folder (deleted afterwards), then the normal pipeline runs.
+
 ## Database insert
 
 `backend/app/db_export.py` lets the user run their own SQL against SQL Server (`pyodbc` when an ODBC Driver 17/18 is installed, else `pymssql`), Oracle (`oracledb` thin), MySQL/MariaDB (`PyMySQL`) and PostgreSQL (`psycopg` 3).
@@ -113,6 +121,8 @@ All endpoints require the `X-Auth-Token` header.
 | GET | `/jobs/{id}?since=N` | Progress + new segments since index N |
 | POST | `/jobs/{id}/cancel` | Cancel |
 | POST | `/export/pdf` | Generate a PDF from (edited) segments |
+| POST | `/youtube/inspect` | Video info + available caption tracks |
+| POST | `/youtube/subtitles` | Fetch one caption track as transcript segments |
 | POST | `/db/test` | Test a database connection string |
 | POST | `/db/preview` | Convert the user's SQL and show the first parameter rows |
 | POST | `/db/execute` | Run the optional "before" statement + inserts in one transaction |

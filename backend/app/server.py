@@ -48,12 +48,22 @@ class ProbeBody(BaseModel):
 
 
 class JobBody(BaseModel):
-    path: str
+    path: str = ""
+    youtube_url: str | None = None
     model: str
     language: str | None = None
     device: Literal["auto", "cpu", "cuda"] = "auto"
     preset: Literal["fast", "balanced", "accurate"] = "balanced"
     arabic_punctuation: bool = True
+
+
+class YoutubeBody(BaseModel):
+    url: str = Field(max_length=2000)
+
+
+class YoutubeCaptionBody(YoutubeBody):
+    lang: str = Field(max_length=40)
+    kind: Literal["manual", "auto"] = "manual"
 
 
 class SegmentBody(BaseModel):
@@ -137,14 +147,6 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(title="Local Transcriber backend", version=__version__, docs_url=None, redoc_url=None)
 
-    # The UI is served from app:// (packaged) or http://localhost (dev).
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"^(app://.*|http://(localhost|127\.0\.0\.1)(:\d+)?|null)$",
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["X-Auth-Token", "Content-Type"],
-    )
-
     @app.middleware("http")
     async def require_token(request: Request, call_next):  # noqa: ANN001, ANN202
         if request.method != "OPTIONS" and settings.auth_token:
@@ -152,6 +154,15 @@ def create_app(settings: Settings) -> FastAPI:
             if not hmac.compare_digest(supplied, settings.auth_token):
                 return JSONResponse({"error": {"code": "unauthorized", "detail": ""}}, status_code=401)
         return await call_next(request)
+
+    # The UI is served from app:// (packaged) or http://localhost (dev). Added after the
+    # token middleware so CORS is the outermost layer: even a 401 carries CORS headers.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(app://.*|http://(localhost|127\.0\.0\.1)(:\d+)?|null)$",
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["X-Auth-Token", "Content-Type"],
+    )
 
     @app.exception_handler(AppError)
     async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
@@ -218,9 +229,17 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.post("/jobs")
     def start_job(body: JobBody) -> dict[str, object]:
+        youtube_url = None
+        if body.youtube_url:
+            from .youtube import normalize_url
+
+            youtube_url = normalize_url(body.youtube_url)
+        elif not body.path:
+            raise AppError(ErrorCode.INVALID_REQUEST, "No file or link given")
         job = jobs.start(
             JobRequest(
-                path=body.path,
+                youtube_url=youtube_url,
+                path=youtube_url or body.path,
                 model=body.model,
                 language=(body.language or None) if body.language != "auto" else None,
                 device=body.device,
@@ -238,6 +257,19 @@ def create_app(settings: Settings) -> FastAPI:
     def cancel_job(job_id: str) -> dict[str, bool]:
         jobs.cancel(job_id)
         return {"ok": True}
+
+    # ---- YouTube ---------------------------------------------------------------
+    @app.post("/youtube/inspect")
+    def youtube_inspect(body: YoutubeBody) -> dict[str, object]:
+        from .youtube import inspect
+
+        return inspect(body.url).to_dict()
+
+    @app.post("/youtube/subtitles")
+    def youtube_subtitles(body: YoutubeCaptionBody) -> dict[str, object]:
+        from .youtube import fetch_subtitles
+
+        return fetch_subtitles(body.url, body.lang, body.kind)
 
     # ---- Insert into the user's own database --------------------------------
     @app.post("/db/test")

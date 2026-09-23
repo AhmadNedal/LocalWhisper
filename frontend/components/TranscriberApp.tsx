@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, type JobSnapshot, type MediaInfo, type ModelInfo, type Segment, type SystemInfo } from "@/lib/api";
+import {
+  ApiError,
+  type JobSnapshot,
+  type MediaInfo,
+  type ModelInfo,
+  type Segment,
+  type SystemInfo,
+  type YoutubeCaption,
+  type YoutubeInfo,
+} from "@/lib/api";
 import { isRtlLanguage } from "@/lib/format";
 import { STRINGS, errorMessage, type UiLang } from "@/lib/i18n";
 import { languageName } from "@/lib/languages";
@@ -13,6 +22,7 @@ import { MediaPicker } from "./MediaPicker";
 import { ProgressPanel } from "./ProgressPanel";
 import { SettingsPanel, type TranscribeSettings } from "./SettingsPanel";
 import { TranscriptView } from "./TranscriptView";
+import { YoutubePanel } from "./YoutubePanel";
 
 const POLL_MS = 400;
 
@@ -54,6 +64,13 @@ export function TranscriberApp() {
   const [pdfPath, setPdfPath] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<Banner>(null);
   const [dbOpen, setDbOpen] = useState(false);
+  // YouTube source (when set, `media` describes the video, not a local file)
+  const [ytInfo, setYtInfo] = useState<YoutubeInfo | null>(null);
+  const [ytLoading, setYtLoading] = useState(false);
+  const [captionLoading, setCaptionLoading] = useState<string | null>(null);
+  const [usedCaption, setUsedCaption] = useState<YoutubeCaption | null>(null);
+  // Language/model of a transcript that didn't come from a job (YouTube captions)
+  const [transcriptMeta, setTranscriptMeta] = useState<{ language: string; model: string } | null>(null);
   const fetchedSegments = useRef(0);
 
   // Keep <html lang/dir> in sync with the UI language.
@@ -123,6 +140,9 @@ export function TranscriberApp() {
       try {
         const info = await client.probe(path);
         setMedia(info);
+        setYtInfo(null);
+        setUsedCaption(null);
+        setTranscriptMeta(null);
         setJob(null);
         setSegments([]);
         setPdfPath(null);
@@ -137,6 +157,57 @@ export function TranscriberApp() {
     [client, running],
   );
 
+  // ---- YouTube ----------------------------------------------------------------
+  const inspectYoutube = async (url: string) => {
+    if (!client || running) return;
+    setYtLoading(true);
+    setBanner(null);
+    try {
+      const info = await client.youtubeInspect(url);
+      setYtInfo(info);
+      setMedia({
+        path: info.url,
+        name: info.title,
+        size_bytes: 0,
+        duration: info.duration,
+        has_video: true,
+        has_audio: true,
+        audio_codec: null,
+        container: "youtube",
+      });
+      setJob(null);
+      setSegments([]);
+      setPdfPath(null);
+      setPdfError(null);
+      setUsedCaption(null);
+      setTranscriptMeta(null);
+      fetchedSegments.current = 0;
+    } catch (err) {
+      setBanner(toBanner(err));
+    } finally {
+      setYtLoading(false);
+    }
+  };
+
+  const applyYoutubeCaption = async (track: YoutubeCaption) => {
+    if (!client || !ytInfo) return;
+    setCaptionLoading(`${track.kind}:${track.lang}`);
+    setBanner(null);
+    try {
+      const res = await client.youtubeSubtitles(ytInfo.url, track.lang, track.kind);
+      setJob(null);
+      setSegments(res.segments);
+      setUsedCaption(track);
+      setTranscriptMeta({ language: res.language, model: track.kind === "manual" ? t.ytModelManual : t.ytModelAuto });
+      setPdfPath(null);
+      fetchedSegments.current = 0;
+    } catch (err) {
+      setBanner(toBanner(err));
+    } finally {
+      setCaptionLoading(null);
+    }
+  };
+
   const pickFile = useCallback(async () => {
     const path = await window.desktop?.openMediaDialog();
     if (path) await selectPath(path);
@@ -150,10 +221,13 @@ export function TranscriberApp() {
     setPdfError(null);
     setCancelling(false);
     setSegments([]);
+    setUsedCaption(null);
+    setTranscriptMeta(null);
     fetchedSegments.current = 0;
     try {
       const snapshot = await client.startJob({
-        path: media.path,
+        path: ytInfo ? "" : media.path,
+        youtube_url: ytInfo ? ytInfo.url : null,
         model: settings.model,
         language: settings.language === "auto" ? null : settings.language,
         device: settings.device,
@@ -233,14 +307,14 @@ export function TranscriberApp() {
       if (!outputPath) return;
     }
     setPdfGenerating(true);
-    const code = job?.language ?? (settings.language === "auto" ? "" : settings.language);
+    const code = transcriptMeta?.language ?? job?.language ?? (settings.language === "auto" ? "" : settings.language);
     try {
       const result = await client.exportPdf({
         output_path: outputPath,
         media_name: media.name,
         language_code: code,
         language_name: languageName(code, exportOptions.pdfLang),
-        model_name: exportOptions.includeModel ? (job?.model ?? settings.model) : null,
+        model_name: exportOptions.includeModel ? (transcriptMeta?.model ?? job?.model ?? settings.model) : null,
         duration: media.duration,
         include_timestamps: exportOptions.includeTimestamps,
         ui_language: exportOptions.pdfLang,
@@ -275,7 +349,8 @@ export function TranscriberApp() {
   };
 
   // ---- Render -----------------------------------------------------------------
-  const transcriptLanguage = job?.language ?? (settings.language === "auto" ? null : settings.language);
+  const transcriptLanguage =
+    transcriptMeta?.language ?? job?.language ?? (settings.language === "auto" ? null : settings.language);
   const transcriptRtl = transcriptLanguage ? isRtlLanguage(transcriptLanguage) : lang === "ar";
 
   return (
@@ -352,11 +427,22 @@ export function TranscriberApp() {
           <MediaPicker
             t={t}
             lang={lang}
-            media={media}
+            media={ytInfo ? null : media}
             loading={mediaLoading}
             disabled={!client || running}
             onPick={pickFile}
             onDropPath={selectPath}
+          />
+          <YoutubePanel
+            t={t}
+            lang={lang}
+            info={ytInfo}
+            loading={ytLoading}
+            disabled={!client || running}
+            usedCaption={usedCaption}
+            captionLoading={captionLoading}
+            onInspect={inspectYoutube}
+            onUseCaption={applyYoutubeCaption}
           />
           <ProgressPanel
             t={t}
@@ -365,6 +451,8 @@ export function TranscriberApp() {
             canStart={Boolean(client && media && settings.model && !running)}
             cancelling={cancelling}
             generatingPdf={pdfGenerating}
+            isYoutube={Boolean(ytInfo)}
+            readyNote={usedCaption ? t.ytLoaded : null}
             onStart={start}
             onCancel={cancel}
           />
@@ -405,8 +493,8 @@ export function TranscriberApp() {
           segments={segments}
           fileName={media.name}
           filePath={media.path}
-          language={job?.language ?? (settings.language === "auto" ? "" : settings.language)}
-          model={job?.model ?? settings.model ?? ""}
+          language={transcriptMeta?.language ?? job?.language ?? (settings.language === "auto" ? "" : settings.language)}
+          model={transcriptMeta?.model ?? job?.model ?? settings.model ?? ""}
           duration={media.duration}
           onClose={() => setDbOpen(false)}
         />

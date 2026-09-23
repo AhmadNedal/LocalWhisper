@@ -29,6 +29,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Quick start](#quick-start)
 - [How to use](#how-to-use)
 - [Choosing a model](#choosing-a-model)
+- [YouTube videos](#youtube-videos)
 - [Insert into a database](#insert-into-a-database)
 - [GPU (NVIDIA) support](#gpu-nvidia-support)
 - [Build a Windows installer](#build-a-windows-installer)
@@ -47,6 +48,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - ⚡ **Fast** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + CTranslate2, automatic NVIDIA GPU acceleration, batched decoding, silence skipping.
 - 🎬 **Any common format** — MP4, MKV, AVI, MOV, WEBM, MP3, WAV, M4A, FLAC and more (drag & drop supported).
 - ✍️ **Live, editable transcript** — see text appear in real time, search it, fix it, switch to a reading view.
+- ▶️ **YouTube links** — uses the video's existing captions when available, otherwise downloads only the audio and transcribes it.
 - 🗄️ **Insert into your database** — SQL Server, Oracle, MySQL or PostgreSQL, with your own SQL statement.
 - 📄 **Proper Arabic PDF export** — connected letters, correct RTL order, mixed Arabic/English and numbers, optional timestamps.
 - 🌙 **Light & dark mode**, Arabic / English interface.
@@ -131,6 +133,20 @@ That's it. The app window opens after a few seconds.
 - Each model is downloaded **once** and stored in the `models/` folder. After that it works offline.
 - You can pre-download a model with its **Download** button, or delete it with the 🗑️ icon.
 - If transcription is slow on your PC, try `small` with the **Fastest** priority.
+
+---
+
+## YouTube videos
+
+Paste a YouTube link in the field under the drop zone (or just paste it — it is fetched automatically):
+
+- **If the video has captions on YouTube**, they are listed — captions uploaded by the channel first (usually the most accurate), then YouTube's automatic captions. Click **Use** and the transcript appears instantly, with timestamps — no model and no download needed.
+- **If it has no captions**, the app tells you it will create them: choose the model and settings as usual and click **Start Transcription**. Only the **audio** is downloaded (about 1 MB per minute), then it is transcribed locally like any file.
+- You can always ignore existing captions and click **Start Transcription** to use Whisper instead.
+
+Everything else — editing, PDF export, inserting into a database — works the same.
+
+> YouTube changes often. If links suddenly stop working, run `npm run update:youtube` to update the YouTube tool ([yt-dlp](https://github.com/yt-dlp/yt-dlp)). Only transcribe videos you have the right to use.
 
 ---
 
@@ -230,6 +246,7 @@ The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and
 | GPU not used | Update the NVIDIA driver, run `npm run setup:gpu`, then `npm run doctor`. |
 | “No speech was detected” | The file has no audible speech (music/silence) or no audio track. |
 | PDF can't be saved | Close the PDF if it's open in another program and export again. |
+| YouTube link fails / “confirm you're not a bot” | Run `npm run update:youtube`, wait a little and retry. Private, members-only and age-restricted videos can't be fetched. |
 | Anything else | Check `%APPDATA%\Local Transcriber\logs\backend.log` and run `npm run doctor`. |
 
 ---
@@ -259,6 +276,7 @@ For how it works internally (architecture, security model, performance), see **[
 | `npm run app` | Builds the UI once and starts the app — uses less memory, best for daily use |
 | `npm run setup` | Re-creates / repairs the Python environment |
 | `npm run doctor` | Prints a diagnostic report |
+| `npm run update:youtube` | Updates the YouTube tool (yt-dlp) |
 | `npm run dist` | Builds the Windows installer |
 | `npm run typecheck` | TypeScript check |
 
@@ -269,7 +287,7 @@ For how it works internally (architecture, security model, performance), see **[
 - Your media files are **read from your disk only** — they are never uploaded.
 - Transcripts and PDFs stay on your computer.
 - No analytics, no telemetry, no accounts, no API keys.
-- The **only** internet access is the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran).
+- Internet is used only for the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran), and — when **you** paste a YouTube link — to fetch that video's captions or audio from YouTube.
 - The internal backend listens on `127.0.0.1` only and is protected by a random per-launch token.
 
 ---

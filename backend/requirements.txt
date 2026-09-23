@@ -21,3 +21,9 @@ pyodbc>=5.1           # SQL Server via "ODBC Driver 17/18" (Windows authenticati
 oracledb>=2.0         # Oracle (thin mode, no Instant Client)
 PyMySQL>=1.1          # MySQL / MariaDB
 psycopg[binary]>=3.1  # PostgreSQL
+
+# YouTube links: read existing captions or download the audio only.
+# yt-dlp[default] includes yt-dlp-ejs; deno is the JavaScript runtime YouTube now requires.
+# YouTube changes often — keep yt-dlp current with `npm run update:youtube`.
+yt-dlp[default]>=2026.8.19
+deno>=2.3

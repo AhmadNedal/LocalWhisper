@@ -134,6 +134,12 @@ export const DatabaseIcon = (p: IconProps) => (
     <path d="M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" />
   </Icon>
 );
+export const YoutubeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2.5" y="5.5" width="19" height="13" rx="4" />
+    <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" />
+  </Icon>
+);
 export const WaveIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0" />

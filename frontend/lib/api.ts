@@ -9,6 +9,7 @@ export type Preset = "fast" | "balanced" | "accurate";
 export type Stage =
   | "queued"
   | "probing"
+  | "downloading_media"
   | "extracting_audio"
   | "downloading_model"
   | "loading_model"
@@ -120,8 +121,34 @@ export interface JobSnapshot {
   elapsedSeconds: number;
 }
 
+export interface YoutubeCaption {
+  lang: string;
+  name: string;
+  kind: "manual" | "auto";
+}
+
+export interface YoutubeInfo {
+  id: string;
+  url: string;
+  title: string;
+  channel: string;
+  duration: number | null;
+  thumbnail: string | null;
+  language: string | null;
+  captions: YoutubeCaption[];
+}
+
+export interface YoutubeSubtitles {
+  segments: Segment[];
+  language: string;
+  kind: "manual" | "auto";
+  title: string;
+  duration: number | null;
+}
+
 export interface StartJobParams {
   path: string;
+  youtube_url?: string | null;
   model: string;
   language: string | null;
   device: Device;
@@ -235,6 +262,12 @@ export class BackendClient {
   }
   cancelJob(id: string) {
     return this.request<{ ok: boolean }>("POST", `/jobs/${id}/cancel`);
+  }
+  youtubeInspect(url: string) {
+    return this.request<YoutubeInfo>("POST", "/youtube/inspect", { url });
+  }
+  youtubeSubtitles(url: string, lang: string, kind: "manual" | "auto") {
+    return this.request<YoutubeSubtitles>("POST", "/youtube/subtitles", { url, lang, kind });
   }
   dbTest(params: DbConnectionParams) {
     return this.request<DbTestResult>("POST", "/db/test", params);

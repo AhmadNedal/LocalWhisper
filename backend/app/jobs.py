@@ -33,6 +33,7 @@ from .transcriber import Engine, TranscriptSegment
 log = logging.getLogger(__name__)
 
 # Share of the overall progress bar each stage represents.
+_DOWNLOAD_SPAN = (0.0, 0.10)  # YouTube audio download (only for YouTube jobs)
 _EXTRACT_SPAN = (0.0, 0.08)
 _PREPARE_SPAN = (0.08, 0.12)
 _TRANSCRIBE_SPAN = (0.12, 0.99)
@@ -40,12 +41,13 @@ _TRANSCRIBE_SPAN = (0.12, 0.99)
 
 @dataclass
 class JobRequest:
-    path: str
+    path: str  # local file, or the YouTube URL when youtube_url is set
     model: str
     language: str | None  # None → auto-detect
     device: str  # auto | cpu | cuda
     preset: str  # fast | balanced | accurate
     arabic_punctuation: bool = True
+    youtube_url: str | None = None
 
 
 @dataclass
@@ -135,19 +137,45 @@ class JobManager:
         tmp_dir = Path(tempfile.mkdtemp(prefix="local-transcriber-"))
         audio: PcmAudio | None = None
         try:
+            # 0. YouTube: download only the audio stream into the temp folder
+            source_path = req.path
+            extract_span = _EXTRACT_SPAN
+            yt_title = None
+            if req.youtube_url:
+                from .youtube import download_audio
+
+                self._set(job, stage="downloading_media", stage_progress=0.0)
+
+                def on_download_media(p: float, done: int, total: int) -> None:
+                    self._set(
+                        job,
+                        stage_progress=p,
+                        progress=_span(_DOWNLOAD_SPAN, p),
+                        download={"done": done, "total": total},
+                    )
+
+                media_file, yt_info = download_audio(req.youtube_url, tmp_dir, on_download_media, job.cancel_event)
+                source_path = str(media_file)
+                yt_title = yt_info.get("title")
+                extract_span = (_DOWNLOAD_SPAN[1], _DOWNLOAD_SPAN[1] + 0.04)
+                self._set(job, download=None)
+
             # 1. Probe (headers only)
             self._set(job, stage="probing")
-            info = probe(req.path)
-            self._set(job, media=info.to_dict())
+            info = probe(source_path)
+            media = info.to_dict()
+            if req.youtube_url:
+                media.update({"path": req.youtube_url, "name": yt_title or info.name, "has_video": True})
+            self._set(job, media=media)
 
             # 2. Extract audio once, directly at 16 kHz mono
             self._set(job, stage="extracting_audio", stage_progress=0.0)
             pcm_path = tmp_dir / "audio.s16le"
 
             def on_extract(p: float) -> None:
-                self._set(job, stage_progress=p, progress=_span(_EXTRACT_SPAN, p))
+                self._set(job, stage_progress=p, progress=_span(extract_span, p))
 
-            extract_audio(self.settings.ffmpeg_path, req.path, pcm_path, info.duration, on_extract, job.cancel_event)
+            extract_audio(self.settings.ffmpeg_path, source_path, pcm_path, info.duration, on_extract, job.cancel_event)
             audio = PcmAudio(pcm_path)
             if job.media is not None and not job.media.get("duration"):
                 with job.lock:

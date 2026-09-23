@@ -43,7 +43,7 @@ function registerAppProtocol() {
     "script-src 'self' 'unsafe-inline'", // Next.js static export uses inline bootstrap scripts
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data: blob: https://i.ytimg.com https://*.ytimg.com", // YouTube thumbnails
     "connect-src http://127.0.0.1:*", // the local backend only — nothing on the internet
   ].join("; ");
 

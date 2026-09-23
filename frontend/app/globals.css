@@ -1153,3 +1153,74 @@ input.num {
   display: block;
   margin-top: 4px;
 }
+
+/* ---- YouTube ------------------------------------------------------------- */
+.yt-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.yt-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+.yt-badge {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: #ff0033;
+  color: #fff;
+}
+.yt-body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.yt-video {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.yt-thumb {
+  width: 112px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--card-2);
+  flex: none;
+}
+.yt-meta {
+  min-width: 0;
+  flex: 1;
+}
+.yt-captions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.yt-captions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.yt-captions li.is-active {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+.yt-caption-name {
+  font-weight: 600;
+}
+.youtube .notice {
+  margin-top: 0;
+}

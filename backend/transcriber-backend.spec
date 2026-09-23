@@ -49,6 +49,24 @@ for pkg in ("pymssql", "oracledb", "cryptography", "pymysql", "psycopg", "psycop
     except Exception:  # noqa: BLE001 - optional driver not installed
         pass
 
+# YouTube: yt-dlp is imported lazily; its JavaScript solver (yt-dlp-ejs) is data,
+# and the Deno runtime binary from the `deno` pip package goes into _internal/deno/.
+hiddenimports += ["app.youtube"]
+try:
+    hiddenimports += collect_submodules("yt_dlp")
+    datas += collect_data_files("yt_dlp_ejs")
+    hiddenimports += collect_submodules("yt_dlp_ejs")
+except Exception:  # noqa: BLE001
+    pass
+try:
+    import deno as _deno  # type: ignore
+
+    _deno_bin = _deno.find_deno_bin()
+    if _deno_bin and Path(_deno_bin).is_file():
+        binaries.append((str(_deno_bin), "deno"))
+except Exception:  # noqa: BLE001
+    pass
+
 a = Analysis(  # noqa: F821
     [str(here / "run_backend.py")],
     pathex=[str(here)],
