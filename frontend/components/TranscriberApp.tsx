@@ -26,6 +26,7 @@ import { useBackend, usePersistentState } from "@/lib/useBackend";
 import { ArchiveDialog } from "./ArchiveDialog";
 import { loadUsableProfiles, profileToDb } from "@/lib/dbProfiles";
 import { WatchDialog } from "./WatchDialog";
+import { LogsDialog } from "./LogsDialog";
 import { BatchDialog, type BatchPrefs } from "./BatchDialog";
 import {
   DEFAULT_SUMMARY_SETTINGS,
@@ -54,6 +55,7 @@ import {
   ShieldIcon,
   WaveIcon,
   WatchFolderIcon,
+  LogIcon,
 } from "./Icons";
 import { MediaPicker } from "./MediaPicker";
 import { ProgressPanel } from "./ProgressPanel";
@@ -247,6 +249,8 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [watch, setWatch] = useState<WatchState | null>(null);
   const [watchOpen, setWatchOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState<null | "all" | "error">(null);
+  const [logAlerts, setLogAlerts] = useState(0);
   const [batchOpen, setBatchOpen] = useState(false);
   const [playlistToAdd, setPlaylistToAdd] = useState<string | null>(null);
   const [pathsToAdd, setPathsToAdd] = useState<string[] | null>(null);
@@ -1104,6 +1108,18 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
     setBatch(res);
   };
 
+  // ---- System log: count new errors for the title-bar badge; record what the user saw
+  useEffect(() => {
+    return window.desktop?.onLogAlert?.((level) => {
+      if (level === "error") setLogAlerts((n) => n + 1);
+    });
+  }, []);
+  useEffect(() => {
+    if (banner) {
+      window.desktop?.logWrite?.("error", `Shown to the user: ${banner.code}${banner.detail ? ` — ${banner.detail}` : ""}`);
+    }
+  }, [banner]);
+
   // ---- Watched folders: new videos are queued by the backend; start the queue here
   // with the current settings (the keys live in this app, never in the backend).
   const startBatchRef = useRef(startBatch);
@@ -1227,6 +1243,17 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
         </div>
         <div className="titlebar-actions">
           <button
+            className={`btn btn-subtle logs-btn${logAlerts ? " has-alerts" : ""}`}
+            onClick={() => {
+              setLogsOpen(logAlerts ? "error" : "all");
+              setLogAlerts(0);
+            }}
+            title={logAlerts ? t.logsNewErrors : t.logsTitle}
+          >
+            <LogIcon size={16} /> {t.logsButton}
+            {logAlerts ? <span className="badge-count err">{logAlerts > 99 ? "99+" : logAlerts}</span> : null}
+          </button>
+          <button
             className={`btn btn-subtle watch-btn${watching ? " is-on" : ""}`}
             onClick={() => setWatchOpen(true)}
             disabled={!client}
@@ -1338,6 +1365,15 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
               </details>
             ) : null}
           </div>
+          <button
+            className="btn btn-subtle"
+            onClick={() => {
+              setLogsOpen("error");
+              setLogAlerts(0);
+            }}
+          >
+            <LogIcon size={14} /> {t.logsShow}
+          </button>
           <button className="btn btn-subtle" onClick={() => setBanner(null)}>
             {t.close}
           </button>
@@ -1640,6 +1676,10 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
           }}
           onClose={() => setArchiveOpen(false)}
         />
+      ) : null}
+
+      {logsOpen ? (
+        <LogsDialog t={t} initialFilter={logsOpen === "error" ? "problems" : "all"} onClose={() => setLogsOpen(null)} />
       ) : null}
 
       {watchOpen && client ? (

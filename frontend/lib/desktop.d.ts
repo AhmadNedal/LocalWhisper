@@ -46,6 +46,15 @@ export interface RegisterDetails {
 
 export type SendCodeResult = { ok: true; expiresInSeconds: number; resendAfterSeconds: number } | AuthFailure;
 
+export interface LogEntry {
+  id: number;
+  rev: number;
+  ts: number;
+  level: "debug" | "info" | "warn" | "error";
+  source: "app" | "backend" | "ui";
+  message: string;
+}
+
 export type DbType = "sqlserver" | "oracle" | "mysql" | "postgresql";
 export type DbMode = "chunks" | "segments" | "full";
 
@@ -81,6 +90,11 @@ export interface DesktopBridge {
     hiddenBody?: string;
   }): Promise<boolean>;
   getOpenAtLogin?(): Promise<{ supported: boolean; enabled: boolean }>;
+  logGet?(afterRev: number): Promise<{ entries: LogEntry[]; rev: number; file: string; dir: string }>;
+  logWrite?(level: "info" | "warn" | "error", message: string): Promise<boolean>;
+  logOpenFolder?(): Promise<string>;
+  logSave?(): Promise<string | null>;
+  onLogAlert?(callback: (level: string) => void): () => void;
   setOpenAtLogin?(on: boolean): Promise<boolean>;
   authRegister?(details: RegisterDetails): Promise<AuthLoginResult>;
   restartBackend(): Promise<BackendStatus>;

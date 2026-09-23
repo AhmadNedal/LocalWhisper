@@ -150,6 +150,7 @@ class BackendProcess extends EventEmitter {
       if (child.stdout) {
         readline.createInterface({ input: child.stdout }).on("line", (line) => {
           log.write(`[stdout] ${line}\n`);
+          this.emit("line", line, "stdout");
           const match = /^READY (\d+)$/.exec(line.trim());
           if (match && !settled) {
             settled = true;
@@ -173,6 +174,9 @@ class BackendProcess extends EventEmitter {
         recentErrors.push(text);
         if (recentErrors.length > 20) recentErrors.shift();
       });
+      if (child.stderr) {
+        readline.createInterface({ input: child.stderr }).on("line", (line) => this.emit("line", line, "stderr"));
+      }
 
       child.on("error", (err) => {
         if (settled) return;

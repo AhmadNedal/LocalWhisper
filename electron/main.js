@@ -15,6 +15,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { BackendProcess } = require("./backend");
 const { AuthGate } = require("./auth");
+const { Logger } = require("./logger");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
 const UI_ROOT = path.join(__dirname, "..", "frontend", "out");
@@ -33,7 +34,26 @@ if (!app.requestSingleInstanceLock()) {
 
 app.setAppUserModelId("com.localtranscriber.app");
 
+// ---- The app-wide log (main process + backend + UI) -------------------------
+const logger = new Logger(path.join(app.getPath("userData"), "logs"));
+logger.info(
+  `Local Transcriber ${app.getVersion()} starting | Electron ${process.versions.electron} | ${process.platform} ${require("node:os").release()} | ${app.isPackaged ? "installed" : "development"}${process.argv.includes("--hidden") ? " | started hidden (with Windows)" : ""}`,
+);
+process.on("uncaughtException", (err) => logger.error(`Main process error: ${err?.stack || err}`));
+process.on("unhandledRejection", (reason) => logger.error(`Main process unhandled rejection: ${/** @type {any} */ (reason)?.stack || reason}`));
+
 const backend = new BackendProcess();
+backend.on("line", (/** @type {string} */ line, /** @type {"stdout" | "stderr"} */ stream) => logger.backendLine(line, stream));
+backend.on("status", (/** @type {any} */ s) => {
+  if (s.state === "ready") logger.info(`Backend connection ready at ${s.url}`);
+  else if (s.state === "error") logger.error(`Backend error [${s.code}]: ${s.message}`);
+  else if (s.state === "starting") logger.info(`Backend ${s.message === "restarting" ? "restarting after a crash" : "starting"}…`);
+  else if (s.state === "stopped") logger.info("Backend stopped");
+});
+// Warnings and errors wake the log button's badge in the UI.
+logger.onEntry((entry) => {
+  if (entry.level === "warn" || entry.level === "error") mainWindow?.webContents.send("log:alert", entry.level);
+});
 /** @type {AuthGate} */
 let auth;
 /** @type {BrowserWindow | null} */
@@ -156,12 +176,31 @@ function createWindow() {
     mainWindow?.show();
   });
 
+  mainWindow.webContents.on("console-message", (event) => {
+    // Warnings and errors of the interface (uncaught exceptions and failed promises end up here too).
+    const { level, message, lineNumber, sourceId } = event;
+    if (level !== "warning" && level !== "error") return;
+    if (/Download the React DevTools|Electron Security Warning/.test(message)) return;
+    const where = sourceId ? ` (${String(sourceId).split("/").pop()}:${lineNumber})` : "";
+    logger.write(level === "error" ? "error" : "warn", "ui", `${message}${where}`);
+  });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logger.error(`The window crashed (${details.reason}, exit code ${details.exitCode}); reloading it.`);
+    if (details.reason !== "clean-exit") mainWindow?.reload();
+  });
+  mainWindow.on("unresponsive", () => logger.warn("The window stopped responding"));
+  mainWindow.on("responsive", () => logger.info("The window is responding again"));
+  mainWindow.webContents.on("did-fail-load", (_event, code, description, url) => {
+    logger.error(`The interface failed to load (${code} ${description}): ${url}`);
+  });
+
   // Closing the window while folders are watched → keep running in the tray.
   mainWindow.on("close", (event) => {
     if (quitting || !background.enabled) return;
     event.preventDefault();
     mainWindow?.hide();
     updateTray();
+    logger.info("Window closed: still running in the tray (watched folders)");
     if (!hiddenNoticeShown && background.hiddenBody && Notification.isSupported()) {
       hiddenNoticeShown = true;
       new Notification({ title: background.hiddenTitle || "Local Transcriber", body: background.hiddenBody }).show();
@@ -196,18 +235,31 @@ function registerIpc() {
     return auth.state();
   });
   ipcMain.handle("auth:options", () => auth.options());
-  ipcMain.handle("auth:sendCode", (_event, /** @type {any} */ details) => auth.sendCode(details || {}));
+  /** @param {string} what @param {any} res @param {string} email */
+  const logAuth = (what, res, email) => {
+    if (res.ok) logger.info(`${what}: ok (${email})`);
+    else logger.write(res.code === "network" || res.code === "server" ? "error" : "warn", "app",
+      `${what} failed (${email}): ${res.code}${res.status ? ` [HTTP ${res.status}]` : ""}${res.message ? ` — ${res.message}` : ""}`);
+  };
+  ipcMain.handle("auth:sendCode", async (_event, /** @type {any} */ details) => {
+    const res = await auth.sendCode(details || {});
+    logAuth("Sign-up: send verification code", res, String(details?.email || ""));
+    return res;
+  });
   ipcMain.handle("auth:register", async (_event, /** @type {any} */ details) => {
     const res = await auth.register(details || {});
+    logAuth("Sign-up: create account", res, String(details?.email || ""));
     if (res.ok) mainWindow?.webContents.send("backend:status", await backend.start());
     return res;
   });
   ipcMain.handle("auth:login", async (_event, /** @type {string} */ email, /** @type {string} */ password, /** @type {boolean} */ remember) => {
     const res = await auth.login(email, password, Boolean(remember));
+    logAuth("Sign-in", res, String(email || ""));
     if (res.ok) mainWindow?.webContents.send("backend:status", await backend.start());
     return res;
   });
   ipcMain.handle("auth:logout", () => {
+    logger.info("Signed out");
     auth.logout();
     return auth.state();
   });
@@ -246,8 +298,32 @@ function registerIpc() {
     return result.canceled ? [] : result.filePaths;
   });
 
+  // ---- Log viewer ------------------------------------------------------------
+  ipcMain.handle("log:get", (_event, /** @type {number} */ afterRev) => logger.since(Number(afterRev) || 0));
+  ipcMain.handle("log:write", (_event, /** @type {string} */ level, /** @type {string} */ message) => {
+    const lv = ["info", "warn", "error"].includes(level) ? /** @type {"info" | "warn" | "error"} */ (level) : "info";
+    logger.write(lv, "ui", String(message ?? "").slice(0, 4000));
+    return true;
+  });
+  ipcMain.handle("log:openFolder", () => shell.openPath(logger.dir));
+  ipcMain.handle("log:save", async () => {
+    if (!mainWindow) return null;
+    const stampName = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(app.getPath("documents"), `local-transcriber-log-${stampName}.txt`),
+      filters: [{ name: "Text", extensions: ["txt", "log"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    fs.writeFileSync(result.filePath, `${logger.text()}\n`, "utf8");
+    logger.info(`Log saved to ${result.filePath}`);
+    return result.filePath;
+  });
+
   // Background mode (tray) while folders are watched; labels come from the UI language.
   ipcMain.handle("app:setBackground", (_event, /** @type {any} */ opts) => {
+    if (Boolean(opts?.enabled) !== background.enabled) {
+      logger.info(opts?.enabled ? "Background mode on: closing the window keeps watching folders" : "Background mode off");
+    }
     background.enabled = Boolean(opts?.enabled);
     for (const key of ["tooltip", "openLabel", "quitLabel", "hiddenTitle", "hiddenBody"]) {
       if (typeof opts?.[key] === "string" && opts[key]) /** @type {any} */ (background)[key] = String(opts[key]).slice(0, 200);
@@ -266,6 +342,7 @@ function registerIpc() {
   ipcMain.handle("app:setOpenAtLogin", (_event, /** @type {boolean} */ on) => {
     if (!app.isPackaged) return false;
     app.setLoginItemSettings({ openAtLogin: Boolean(on), args: ["--hidden"] });
+    logger.info(`Start with Windows: ${on ? "on" : "off"}`);
     return app.getLoginItemSettings({ args: ["--hidden"] }).openAtLogin;
   });
 

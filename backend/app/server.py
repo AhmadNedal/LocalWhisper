@@ -12,6 +12,7 @@ Security model
 from __future__ import annotations
 
 import hmac
+import time
 import logging
 import re
 from datetime import datetime
@@ -429,6 +430,29 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(title="Local Transcriber backend", version=__version__, docs_url=None, redoc_url=None)
 
+    # Requests the UI polls every second or two: logged only when they fail or are slow.
+    quiet_gets = ("/batch", "/watch", "/jobs/", "/health", "/media/stream", "/models", "/system", "/summaries/",
+                  "/translations/", "/burn/", "/assistant/", "/logs")
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):  # noqa: ANN001, ANN202
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            log.exception("%s %s crashed", request.method, request.url.path)
+            raise
+        ms = (time.perf_counter() - started) * 1000
+        path = request.url.path
+        quiet = request.method in ("GET", "OPTIONS") and path.startswith(quiet_gets)
+        if response.status_code >= 500:
+            log.error("%s %s -> %d (%.0f ms)", request.method, path, response.status_code, ms)
+        elif response.status_code >= 400:
+            log.warning("%s %s -> %d (%.0f ms)", request.method, path, response.status_code, ms)
+        elif not quiet or ms > 5000:
+            log.info("%s %s -> %d (%.0f ms)", request.method, path, response.status_code, ms)
+        return response
+
     @app.middleware("http")
     async def require_token(request: Request, call_next):  # noqa: ANN001, ANN202
         if request.method != "OPTIONS" and settings.auth_token:
@@ -450,12 +474,13 @@ def create_app(settings: Settings) -> FastAPI:
     )
 
     @app.exception_handler(AppError)
-    async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
+    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+        log.warning("%s %s failed: %s — %s", request.method, request.url.path, exc.code.value, exc.detail)
         return JSONResponse({"error": exc.to_dict()}, status_code=_STATUS_FOR_CODE.get(exc.code, 422))
 
     @app.exception_handler(Exception)
-    async def unexpected_handler(_request: Request, exc: Exception) -> JSONResponse:
-        log.exception("Unhandled error")
+    async def unexpected_handler(request: Request, exc: Exception) -> JSONResponse:
+        log.error("Unhandled error in %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse(
             {"error": {"code": ErrorCode.INTERNAL.value, "detail": exc.__class__.__name__}}, status_code=500
         )

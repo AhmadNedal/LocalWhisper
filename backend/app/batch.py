@@ -458,6 +458,7 @@ class BatchManager:
         with self._lock:
             item.status = "running"
             item.started_at = time.time()
+        log.info("Queue: starting %s%s", item.path, f" (course: {item.course})" if item.course else "")
         prefetched = self._take_prefetch(item)
         self._kick_prefetch(item, opts)
         prepared = prefetched.prepared if prefetched else None
@@ -667,12 +668,17 @@ class BatchManager:
                 item.translation_error = {"code": "translate_failed", "detail": str(exc)[:300]}
 
     def _finish(self, item: BatchItem, status: str, error: dict[str, str] | None) -> None:
+        if error:
+            log.warning("Queue: %s -> %s (%s: %s)", item.name, status, error.get("code"), error.get("detail"))
+        else:
+            log.info("Queue: %s -> %s", item.name, status)
         with self._lock:
             item.status = status
             item.error = error
             item.finished_at = time.time()
 
     def _pause(self, error: dict[str, str]) -> None:
+        log.warning("Queue paused: %s — %s", error.get("code"), error.get("detail"))
         with self._lock:
             self.pause_reason = error
             self._stop_after_current.set()

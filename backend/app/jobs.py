@@ -174,6 +174,18 @@ class JobManager:
             self._jobs = {k: v for k, v in self._jobs.items() if v.status == "running"}
             job = Job(id=uuid.uuid4().hex, request=request)
             self._jobs[job.id] = job
+        source = request.youtube_url or request.path
+        if request.engine == "cloud":
+            engine = f"cloud {request.cloud_provider}/{request.cloud_model}"
+        else:
+            engine = f"local {request.model} · device={request.device} · preset={request.preset}"
+        log.info(
+            "Job %s started: %s | %s | language=%s",
+            job.id[:8],
+            source,
+            engine,
+            request.language or "auto",
+        )
         threading.Thread(target=self._run, args=(job,), daemon=True, name=f"job-{job.id[:8]}").start()
         return job
 
@@ -183,8 +195,19 @@ class JobManager:
     # ------------------------------------------------------------------ worker
     def _set(self, job: Job, **changes: Any) -> None:
         with job.lock:
+            stage_before = job.stage
             for key, value in changes.items():
                 setattr(job, key, value)
+            stage_after = job.stage
+            detail = ""
+            if "device" in changes and changes.get("device"):
+                detail = f" on {job.device} ({job.compute_type})"
+            if "language" in changes and changes.get("language"):
+                log.info("Job %s: language detected: %s (%.0f%%)", job.id[:8], job.language, (job.language_probability or 0) * 100)
+        if stage_after != stage_before:
+            log.info("Job %s: stage %s -> %s%s", job.id[:8], stage_before, stage_after, detail)
+        elif detail:
+            log.info("Job %s: running%s", job.id[:8], detail)
 
     def _resolve_device(self, job: Job) -> tuple[str, str]:
         req = job.request
@@ -332,12 +355,25 @@ class JobManager:
                 job.stage = "completed"
                 job.progress = 1.0
                 job.finished_at = time.time()
+            duration = (job.media or {}).get("duration") or 0
+            log.info(
+                "Job %s completed: %d segments, %.0fs of media in %.0fs",
+                job.id[:8],
+                len(segments),
+                duration,
+                job.finished_at - job.started_at,
+            )
         except BaseException as exc:  # noqa: BLE001 - every failure must reach the UI
             err = classify_exception(exc)
             if isinstance(exc, Cancelled) or job.cancel_event.is_set():
                 err = Cancelled()
             if err.code != ErrorCode.CANCELLED:
-                log.exception("Job %s failed", job.id)
+                log.error("Job %s failed at stage '%s': %s — %s", job.id[:8], job.stage, err.code.value, err.detail)
+                log.debug("Job %s traceback", job.id[:8], exc_info=exc)
+                if err.code in (ErrorCode.INTERNAL, ErrorCode.TRANSCRIPTION_FAILED, ErrorCode.MODEL_LOAD_FAILED):
+                    log.exception("Job %s failure details", job.id[:8])
+            else:
+                log.info("Job %s cancelled", job.id[:8])
             with job.lock:
                 job.status = "cancelled" if err.code == ErrorCode.CANCELLED else "error"
                 job.stage = job.status
@@ -443,6 +479,7 @@ class JobManager:
         )
 
     def _warn(self, job: Job, message: str) -> None:
+        log.warning("Job %s: %s", job.id[:8], message)
         with job.lock:
             job.warnings.append(message)
 

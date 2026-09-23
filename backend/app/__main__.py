@@ -44,6 +44,7 @@ def main() -> None:
 
     settings = load_settings()
     prepare_cuda_libraries()  # before CTranslate2 touches CUDA
+    _log_startup(settings)
 
     if settings.parent_pid:
         threading.Thread(target=_watch_parent, args=(settings.parent_pid,), daemon=True).start()
@@ -71,6 +72,33 @@ def main() -> None:
 
     threading.Thread(target=announce, daemon=True).start()
     server.run(sockets=[sock])
+
+
+def _log_startup(settings) -> None:  # noqa: ANN001
+    """One summary line per start: the first thing to check when something goes wrong."""
+    import platform
+
+    log = logging.getLogger("app.startup")
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        ram = f"RAM {vm.total / 1024**3:.1f} GB (free {vm.available / 1024**3:.1f} GB)"
+        cpu = f"CPU {psutil.cpu_count(logical=False) or '?'} cores / {psutil.cpu_count() or '?'} threads"
+    except Exception:  # noqa: BLE001
+        ram = cpu = "?"
+    from . import __version__
+
+    log.info(
+        "Backend %s starting | Python %s | %s %s | %s | %s",
+        __version__,
+        platform.python_version(),
+        platform.system(),
+        platform.release(),
+        cpu,
+        ram,
+    )
+    log.info("Models: %s | Data: %s | FFmpeg: %s", settings.models_dir, settings.data_dir, settings.ffmpeg_path or "not found")
 
 
 if __name__ == "__main__":
