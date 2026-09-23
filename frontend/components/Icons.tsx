@@ -127,6 +127,13 @@ export const RefreshIcon = (p: IconProps) => (
     <path d="M20 4v7h-7" />
   </Icon>
 );
+export const DatabaseIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <ellipse cx="12" cy="5.5" rx="7.5" ry="3" />
+    <path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" />
+    <path d="M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6" />
+  </Icon>
+);
 export const WaveIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0" />

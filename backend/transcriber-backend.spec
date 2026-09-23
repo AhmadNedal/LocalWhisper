@@ -38,7 +38,16 @@ except ImportError:
 
 hiddenimports = []
 hiddenimports += collect_submodules("uvicorn")
-hiddenimports += ["app", "app.server", "app.jobs", "app.transcriber", "app.pdf_export", "uharfbuzz"]
+hiddenimports += ["app", "app.server", "app.jobs", "app.transcriber", "app.pdf_export", "app.db_export", "uharfbuzz"]
+# Database drivers are imported lazily, so PyInstaller can't see them on its own.
+# (pyodbc is a single extension module; it links to odbc32.dll, which ships with Windows.)
+hiddenimports += ["pyodbc"]
+for pkg in ("pymssql", "oracledb", "cryptography", "pymysql", "psycopg", "psycopg_binary"):
+    try:
+        hiddenimports += collect_submodules(pkg)
+        binaries += collect_dynamic_libs(pkg)
+    except Exception:  # noqa: BLE001 - optional driver not installed
+        pass
 
 a = Analysis(  # noqa: F821
     [str(here / "run_backend.py")],

@@ -88,6 +88,15 @@ Cancellation is cooperative (checked between segments) and kills FFmpeg immediat
 - **Font:** Amiri (covers Arabic and Latin) is embedded, so there are no empty boxes.
 - **Layout:** two-pass layout so the footer can show "page X of Y" in Arabic. The file is written atomically (`.part` then rename).
 
+## Database insert
+
+`backend/app/db_export.py` lets the user run their own SQL against SQL Server (`pyodbc` when an ODBC Driver 17/18 is installed, else `pymssql`), Oracle (`oracledb` thin), MySQL/MariaDB (`PyMySQL`) and PostgreSQL (`psycopg` 3).
+
+- A small tokenizer rewrites `@name` / `:name` variables into the driver's placeholder style (`%(p_name)s`, `:p_name` or `?`), skipping string literals, quoted identifiers and comments. `@@IDENTITY`, `::casts` and user-declared variables are left alone.
+- Values are always **bound parameters**. Nothing is interpolated into SQL text.
+- The optional "before" statement and all inserts run in **one transaction**, rolled back on any error.
+- Saved profiles live in `%APPDATA%\Local Transcriber\db-profiles.json`; connection strings are encrypted with Electron `safeStorage` (Windows DPAPI).
+
 ## Local API
 
 All endpoints require the `X-Auth-Token` header.
@@ -104,6 +113,9 @@ All endpoints require the `X-Auth-Token` header.
 | GET | `/jobs/{id}?since=N` | Progress + new segments since index N |
 | POST | `/jobs/{id}/cancel` | Cancel |
 | POST | `/export/pdf` | Generate a PDF from (edited) segments |
+| POST | `/db/test` | Test a database connection string |
+| POST | `/db/preview` | Convert the user's SQL and show the first parameter rows |
+| POST | `/db/execute` | Run the optional "before" statement + inserts in one transaction |
 
 Errors are returned as `{"error": {"code": "...", "detail": "..."}}`. The UI maps each `code` to a friendly Arabic/English message (`frontend/lib/i18n.ts`).
 

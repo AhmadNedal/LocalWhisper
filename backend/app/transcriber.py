@@ -132,13 +132,17 @@ class Engine:
             self._key = None
 
             if device == "cpu":
+                # Only refuse when the model truly cannot fit. Windows moves idle
+                # memory of other programs to the pagefile, so "available RAM"
+                # alone is far too pessimistic (a plain WhisperModel("medium")
+                # runs fine on an 8 GB laptop showing 0.5 GB free).
                 needed = spec.ram_cpu_mb * 1024 * 1024
-                available = psutil.virtual_memory().available
-                if available < needed:
+                capacity = psutil.virtual_memory().available + psutil.swap_memory().free
+                if capacity < needed:
                     raise AppError(
                         ErrorCode.INSUFFICIENT_MEMORY,
-                        f"Model '{spec.id}' needs about {spec.ram_cpu_mb / 1024:.1f} GB of free RAM, "
-                        f"only {available / 1024**3:.1f} GB available",
+                        f"Model '{spec.id}' needs about {spec.ram_cpu_mb / 1024:.1f} GB of memory; "
+                        f"only {capacity / 1024**3:.1f} GB available including the page file",
                     )
 
             from faster_whisper import WhisperModel
@@ -177,6 +181,7 @@ class Engine:
         language: str | None,
         preset_name: str,
         arabic_punctuation: bool,
+        low_memory: bool = False,
         cancel: threading.Event,
         on_language: Callable[[str, float], None],
         on_segment: Callable[[TranscriptSegment, float], None],
@@ -203,8 +208,12 @@ class Engine:
         else:
             on_language(language, 1.0)
 
+        # Batching decodes several chunks at once, which needs extra RAM. When
+        # memory is tight on the CPU, fall back to the classic sequential decoder
+        # (the same call as a plain `model.transcribe(...)`), which is lean.
+        batched = preset.batched and not (low_memory and device == "cpu")
         runner = model
-        if preset.batched:
+        if batched:
             from faster_whisper import BatchedInferencePipeline
 
             runner = BatchedInferencePipeline(model=model)
@@ -237,7 +246,7 @@ class Engine:
                 vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 300},
                 without_timestamps=False,
             )
-            if preset.batched:
+            if batched:
                 seg_iter, _info = runner.transcribe(chunk, batch_size=batch_size, **common)
             else:
                 seg_iter, _info = runner.transcribe(chunk, **common)

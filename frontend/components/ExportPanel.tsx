@@ -2,7 +2,7 @@
 
 import type { Strings, UiLang } from "@/lib/i18n";
 import { errorMessage } from "@/lib/i18n";
-import { AlertIcon, CheckIcon, FolderIcon, PdfIcon } from "./Icons";
+import { AlertIcon, CheckIcon, DatabaseIcon, FolderIcon, PdfIcon } from "./Icons";
 
 export interface ExportOptions {
   includeTimestamps: boolean;
@@ -20,9 +20,21 @@ interface Props {
   savedPath: string | null;
   error: { code: string; detail: string } | null;
   onExport: (saveAs: boolean) => void;
+  onOpenDatabase: () => void;
 }
 
-export function ExportPanel({ t, lang, options, onOptions, canExport, generating, savedPath, error, onExport }: Props) {
+export function ExportPanel({
+  t,
+  lang,
+  options,
+  onOptions,
+  canExport,
+  generating,
+  savedPath,
+  error,
+  onExport,
+  onOpenDatabase,
+}: Props) {
   return (
     <section className="card export">
       <div className="export-options">
@@ -57,6 +69,9 @@ export function ExportPanel({ t, lang, options, onOptions, canExport, generating
         </button>
         <button className="btn" disabled={!canExport || generating} onClick={() => onExport(true)}>
           {t.exportSaveAs}
+        </button>
+        <button className="btn" disabled={!canExport} onClick={onOpenDatabase}>
+          <DatabaseIcon size={16} /> {t.dbOpen}
         </button>
         <button className="btn btn-subtle" onClick={() => window.desktop?.openOutputDir()}>
           <FolderIcon size={16} /> {t.openOutputFolder}

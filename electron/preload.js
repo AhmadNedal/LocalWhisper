@@ -37,4 +37,9 @@ contextBridge.exposeInMainWorld("desktop", {
   openPath: (target) => ipcRenderer.invoke("shell:openPath", target),
   openOutputDir: () => ipcRenderer.invoke("shell:openOutputDir"),
   openModelsDir: () => ipcRenderer.invoke("shell:openModelsDir"),
+
+  /** Saved database profiles (connection strings are encrypted with Windows DPAPI). */
+  loadDbProfiles: () => ipcRenderer.invoke("db:loadProfiles"),
+  /** @param {unknown[]} profiles */
+  saveDbProfiles: (profiles) => ipcRenderer.invoke("db:saveProfiles", profiles),
 });

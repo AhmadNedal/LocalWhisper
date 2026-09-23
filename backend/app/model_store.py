@@ -33,7 +33,7 @@ class ModelSpec:
     id: str
     repo: str
     download_mb: int  # approximate download size
-    ram_cpu_mb: int  # approximate RAM when running int8 on CPU
+    ram_cpu_mb: int  # approximate working set when running int8 on CPU (measured, not peak virtual)
     vram_gpu_mb: int  # approximate VRAM when running float16 on GPU (batched)
     speed: int  # 1 (slowest) … 5 (fastest)
     arabic_accuracy: int  # 1 (weak) … 5 (best)
@@ -42,12 +42,12 @@ class ModelSpec:
 CATALOG: dict[str, ModelSpec] = {
     spec.id: spec
     for spec in (
-        ModelSpec("tiny", "Systran/faster-whisper-tiny", 75, 500, 1000, 5, 1),
-        ModelSpec("base", "Systran/faster-whisper-base", 145, 700, 1200, 5, 2),
-        ModelSpec("small", "Systran/faster-whisper-small", 485, 1300, 2000, 4, 3),
-        ModelSpec("medium", "Systran/faster-whisper-medium", 1530, 2600, 3500, 2, 4),
-        ModelSpec("large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo", 1620, 3000, 3500, 4, 4),
-        ModelSpec("large-v3", "Systran/faster-whisper-large-v3", 3090, 4500, 5500, 1, 5),
+        ModelSpec("tiny", "Systran/faster-whisper-tiny", 75, 350, 1000, 5, 1),
+        ModelSpec("base", "Systran/faster-whisper-base", 145, 450, 1200, 5, 2),
+        ModelSpec("small", "Systran/faster-whisper-small", 485, 900, 2000, 4, 3),
+        ModelSpec("medium", "Systran/faster-whisper-medium", 1530, 1700, 3500, 2, 4),
+        ModelSpec("large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo", 1620, 2000, 3500, 4, 4),
+        ModelSpec("large-v3", "Systran/faster-whisper-large-v3", 3090, 3300, 5500, 1, 5),
     )
 }
 

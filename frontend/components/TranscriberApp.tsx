@@ -6,6 +6,7 @@ import { isRtlLanguage } from "@/lib/format";
 import { STRINGS, errorMessage, type UiLang } from "@/lib/i18n";
 import { languageName } from "@/lib/languages";
 import { useBackend, usePersistentState } from "@/lib/useBackend";
+import { DatabaseDialog } from "./DatabaseDialog";
 import { ExportPanel, type ExportOptions } from "./ExportPanel";
 import { AlertIcon, GlobeIcon, RefreshIcon, ShieldIcon, WaveIcon } from "./Icons";
 import { MediaPicker } from "./MediaPicker";
@@ -52,6 +53,7 @@ export function TranscriberApp() {
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [pdfPath, setPdfPath] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<Banner>(null);
+  const [dbOpen, setDbOpen] = useState(false);
   const fetchedSegments = useRef(0);
 
   // Keep <html lang/dir> in sync with the UI language.
@@ -390,9 +392,25 @@ export function TranscriberApp() {
             savedPath={pdfPath}
             error={pdfError}
             onExport={exportPdf}
+            onOpenDatabase={() => setDbOpen(true)}
           />
         </div>
       </main>
+
+      {dbOpen && client && media ? (
+        <DatabaseDialog
+          t={t}
+          lang={lang}
+          client={client}
+          segments={segments}
+          fileName={media.name}
+          filePath={media.path}
+          language={job?.language ?? (settings.language === "auto" ? "" : settings.language)}
+          model={job?.model ?? settings.model ?? ""}
+          duration={media.duration}
+          onClose={() => setDbOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -16,6 +16,7 @@
     "setup:gpu": "node scripts/setup-python.mjs --gpu",
     "setup:cpu": "node scripts/setup-python.mjs --cpu",
     "dev": "node scripts/dev.mjs",
+    "app": "next build frontend && electron .",
     "dev:ui": "next dev frontend --port 3123",
     "build:ui": "next build frontend",
     "build:backend": "node scripts/build-backend.mjs",

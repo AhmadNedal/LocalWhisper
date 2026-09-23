@@ -39,6 +39,7 @@ export function ProgressPanel({ t, lang, job, canStart, cancelling, generatingPd
       : t.idle;
   const gpuFallback = job?.warnings.some((w) => w.startsWith("gpu_fallback"));
   const gpuTooSmall = job?.warnings.includes("gpu_too_small");
+  const lowMemory = job?.warnings.includes("low_memory");
 
   return (
     <section className="card progress-card">
@@ -137,6 +138,11 @@ export function ProgressPanel({ t, lang, job, canStart, cancelling, generatingPd
             ) : null}
           </dl>
 
+          {lowMemory && job.status === "running" ? (
+            <div className="notice info">
+              <AlertIcon size={16} /> {lowMemory ? t.lowMemory : null}
+            </div>
+          ) : null}
           {gpuTooSmall ? (
             <div className="notice warn">
               <AlertIcon size={16} /> {t.gpuTooSmall}

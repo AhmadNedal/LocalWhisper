@@ -6,6 +6,23 @@ export type BackendStatus =
   | { state: "error"; code: string; message: string }
   | { state: "stopped" };
 
+export type DbType = "sqlserver" | "oracle" | "mysql" | "postgresql";
+export type DbMode = "chunks" | "segments" | "full";
+
+/** A saved "insert into database" configuration. */
+export interface DbProfile {
+  id: string;
+  name: string;
+  dbType: DbType;
+  /** Decrypted in the main process; stored encrypted with Windows DPAPI. */
+  connectionString: string;
+  sql: string;
+  preSql: string;
+  mode: DbMode;
+  chunkSeconds: number;
+  variables: { name: string; value: string }[];
+}
+
 export interface DesktopBridge {
   isDesktop: true;
   platform: string;
@@ -19,6 +36,8 @@ export interface DesktopBridge {
   openPath(path: string): Promise<void>;
   openOutputDir(): Promise<void>;
   openModelsDir(): Promise<void>;
+  loadDbProfiles(): Promise<DbProfile[]>;
+  saveDbProfiles(profiles: DbProfile[]): Promise<{ ok: boolean; encrypted: boolean }>;
 }
 
 declare global {

@@ -29,6 +29,7 @@ from .errors import AppError, ErrorCode
 from .jobs import JobManager, JobRequest
 from .media import SUPPORTED_EXTENSIONS, probe
 from .model_store import CATALOG, DEFAULT_MODEL_CPU, DEFAULT_MODEL_GPU, ModelStore
+from . import db_export
 from .pdf_export import ExportRequest, ExportSegment, generate_pdf
 from .system_info import detect_devices
 from .transcriber import Engine
@@ -71,6 +72,46 @@ class PdfBody(BaseModel):
     include_timestamps: bool = True
     ui_language: Literal["ar", "en"] = "ar"
     segments: list[SegmentBody] = Field(default_factory=list)
+
+
+class DbConnectionBody(BaseModel):
+    db_type: Literal["sqlserver", "oracle", "mysql", "postgresql"]
+    connection_string: str = Field(default="", max_length=4000)
+
+
+class DbInsertBody(DbConnectionBody):
+    sql: str = Field(max_length=100_000)
+    pre_sql: str = Field(default="", max_length=100_000)
+    mode: Literal["chunks", "segments", "full"] = "chunks"
+    chunk_seconds: int = Field(default=10, ge=1, le=3600)
+    variables: dict[str, str] = Field(default_factory=dict)
+    file_name: str = ""
+    file_path: str = ""
+    language: str = ""
+    model: str = ""
+    duration: float | None = None
+    segments: list[SegmentBody] = Field(default_factory=list)
+
+    def to_request(self) -> tuple[db_export.DbRequest, db_export.TranscriptPayload]:
+        return (
+            db_export.DbRequest(
+                db_type=self.db_type,
+                connection_string=self.connection_string,
+                sql=self.sql,
+                pre_sql=self.pre_sql,
+                mode=self.mode,
+                chunk_seconds=self.chunk_seconds,
+                variables={k.strip(): v for k, v in self.variables.items() if k.strip()},
+            ),
+            db_export.TranscriptPayload(
+                segments=[ExportSegment(s.start, s.end, s.text) for s in self.segments],
+                file_name=self.file_name,
+                file_path=self.file_path,
+                language=self.language,
+                model=self.model,
+                duration=self.duration,
+            ),
+        )
 
 
 def _safe_stem(name: str) -> str:
@@ -197,6 +238,19 @@ def create_app(settings: Settings) -> FastAPI:
     def cancel_job(job_id: str) -> dict[str, bool]:
         jobs.cancel(job_id)
         return {"ok": True}
+
+    # ---- Insert into the user's own database --------------------------------
+    @app.post("/db/test")
+    def db_test(body: DbConnectionBody) -> dict[str, object]:
+        return db_export.test_connection(body.db_type, body.connection_string)
+
+    @app.post("/db/preview")
+    def db_preview(body: DbInsertBody) -> dict[str, object]:
+        return db_export.preview(*body.to_request())
+
+    @app.post("/db/execute")
+    def db_execute(body: DbInsertBody) -> dict[str, object]:
+        return db_export.execute(*body.to_request())
 
     @app.post("/export/pdf")
     def export_pdf(body: PdfBody) -> dict[str, str]:

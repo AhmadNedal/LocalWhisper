@@ -9,7 +9,7 @@
  * - Provide native features to the UI through a minimal, typed preload bridge:
  *   file dialogs, drag & drop paths, "show in folder".
  */
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -151,6 +151,48 @@ function registerIpc() {
 
   ipcMain.handle("shell:openPath", async (_event, /** @type {string} */ target) => {
     if (typeof target === "string" && fs.existsSync(target)) await shell.openPath(target);
+  });
+
+  // ---- Saved database profiles ------------------------------------------
+  // Stored in %APPDATA%\Local Transcriber\db-profiles.json. The connection
+  // string (which contains the password) is encrypted with Electron's
+  // safeStorage — Windows DPAPI, readable only by this Windows user account.
+  const profilesFile = () => path.join(app.getPath("userData"), "db-profiles.json");
+
+  ipcMain.handle("db:loadProfiles", () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(profilesFile(), "utf8"));
+      const list = Array.isArray(raw.profiles) ? raw.profiles : [];
+      return list.map((/** @type {any} */ p) => {
+        let connectionString = "";
+        if (p.connectionStringEnc && safeStorage.isEncryptionAvailable()) {
+          try {
+            connectionString = safeStorage.decryptString(Buffer.from(p.connectionStringEnc, "base64"));
+          } catch {
+            connectionString = ""; // created by another Windows user / machine
+          }
+        }
+        const { connectionStringEnc: _omit, ...rest } = p;
+        return { ...rest, connectionString };
+      });
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle("db:saveProfiles", (_event, /** @type {any[]} */ profiles) => {
+    const canEncrypt = safeStorage.isEncryptionAvailable();
+    const stored = (Array.isArray(profiles) ? profiles : []).map((p) => {
+      const { connectionString, ...rest } = p;
+      return {
+        ...rest,
+        connectionStringEnc:
+          canEncrypt && connectionString ? safeStorage.encryptString(String(connectionString)).toString("base64") : "",
+      };
+    });
+    fs.mkdirSync(path.dirname(profilesFile()), { recursive: true });
+    fs.writeFileSync(profilesFile(), JSON.stringify({ version: 1, profiles: stored }, null, 2), "utf8");
+    return { ok: true, encrypted: canEncrypt };
   });
 
   backend.on("status", (status) => {

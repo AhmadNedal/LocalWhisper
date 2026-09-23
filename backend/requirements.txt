@@ -14,3 +14,10 @@ uharfbuzz>=0.40
 # RAM / CPU detection and parent-process watchdog
 psutil>=5.9
 numpy>=1.24
+
+# "Insert into database" feature — pure pip drivers, no database client install needed
+pymssql>=2.3          # SQL Server (fallback when no ODBC driver is installed)
+pyodbc>=5.1           # SQL Server via "ODBC Driver 17/18" (Windows authentication)
+oracledb>=2.0         # Oracle (thin mode, no Instant Client)
+PyMySQL>=1.1          # MySQL / MariaDB
+psycopg[binary]>=3.1  # PostgreSQL

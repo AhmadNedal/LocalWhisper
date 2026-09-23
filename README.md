@@ -29,6 +29,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Quick start](#quick-start)
 - [How to use](#how-to-use)
 - [Choosing a model](#choosing-a-model)
+- [Insert into a database](#insert-into-a-database)
 - [GPU (NVIDIA) support](#gpu-nvidia-support)
 - [Build a Windows installer](#build-a-windows-installer)
 - [Troubleshooting](#troubleshooting)
@@ -46,6 +47,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - ⚡ **Fast** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + CTranslate2, automatic NVIDIA GPU acceleration, batched decoding, silence skipping.
 - 🎬 **Any common format** — MP4, MKV, AVI, MOV, WEBM, MP3, WAV, M4A, FLAC and more (drag & drop supported).
 - ✍️ **Live, editable transcript** — see text appear in real time, search it, fix it, switch to a reading view.
+- 🗄️ **Insert into your database** — SQL Server, Oracle, MySQL or PostgreSQL, with your own SQL statement.
 - 📄 **Proper Arabic PDF export** — connected letters, correct RTL order, mixed Arabic/English and numbers, optional timestamps.
 - 🌙 **Light & dark mode**, Arabic / English interface.
 
@@ -132,6 +134,47 @@ That's it. The app window opens after a few seconds.
 
 ---
 
+## Insert into a database
+
+After transcribing, click **Insert into database** to write the transcript straight into your own database — **SQL Server, Oracle, MySQL/MariaDB or PostgreSQL** — with an SQL statement you write yourself.
+
+1. Choose the database type and paste your **connection string**, then click **Test connection**.
+
+   | Database | Example connection string |
+   |---|---|
+   | SQL Server | `Server=myserver,1433;Database=MyDb;User Id=myuser;Password=mypassword;TrustServerCertificate=True;` |
+   | Oracle | `myuser/mypassword@myhost:1521/ORCLPDB1` |
+   | MySQL / MariaDB | `Server=myhost;Port=3306;Database=mydb;Uid=myuser;Pwd=mypassword;` |
+   | PostgreSQL | `Host=myhost;Port=5432;Database=mydb;Username=myuser;Password=mypassword` |
+
+2. Choose the **insert shape**: one row per ~N-second chunk, one row per Whisper segment, or one row for the whole transcript.
+3. Add **your own variables** if needed (e.g. `lesson_id = 42`).
+4. Write the statement using variables with `@` (or `:` for Oracle):
+
+   ```sql
+   -- optional, runs once before the inserts
+   DELETE FROM LessonTranscripts WHERE LessonId = @lesson_id;
+
+   -- runs once per row
+   INSERT INTO LessonTranscripts (LessonId, StartSeconds, EndSeconds, [Text])
+   VALUES (@lesson_id, @start_seconds, @end_seconds, @text);
+   ```
+
+5. Click **Preview** to see the first rows, then **Run insert** and confirm.
+
+**Available variables**
+
+| Per row | Per file |
+|---|---|
+| `text`, `start_seconds`, `end_seconds`, `start_time`, `end_time`, `segment_index` | `file_name`, `file_path`, `language`, `model`, `duration_seconds`, `segment_count`, `full_text`, `transcribed_at` |
+
+- Values are sent as **bound parameters**, never pasted into the SQL, so Arabic text, quotes and `%` are always safe (no SQL injection).
+- Everything runs in **one transaction**: if any row fails, nothing is inserted (including the “before” statement).
+- Profiles (connection + SQL) can be saved. The connection string is **encrypted with Windows DPAPI** and stored only on your PC.
+- Drivers are installed automatically by `npm install` / `npm run setup` — no database client is needed. For SQL Server with *Windows authentication* (`Integrated Security=True`), install Microsoft's “ODBC Driver 18 for SQL Server”.
+
+---
+
 ## GPU (NVIDIA) support
 
 The app detects your GPU automatically:
@@ -183,7 +226,7 @@ The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and
 | `'npm' is not recognized` | Install Node.js and open a **new** terminal window. |
 | “FFmpeg was not found” | Run `npm install` again. |
 | Model download failed | Internet is needed the first time only. Check your connection or proxy and retry — partial downloads resume. |
-| “Not enough memory” | Close other programs or choose a smaller model. |
+| “Not enough memory” / slow on a laptop | The app runs in memory-saving mode automatically when RAM is low. For more speed, close your browser and other apps, and use `npm run app` instead of `npm run dev` — the development server alone uses several hundred MB. |
 | GPU not used | Update the NVIDIA driver, run `npm run setup:gpu`, then `npm run doctor`. |
 | “No speech was detected” | The file has no audible speech (music/silence) or no audio track. |
 | PDF can't be saved | Close the PDF if it's open in another program and export again. |
@@ -212,7 +255,8 @@ For how it works internally (architecture, security model, performance), see **[
 | Command | What it does |
 |---|---|
 | `npm install` | Installs everything (runs `npm run setup` automatically) |
-| `npm run dev` | Starts the app in development mode |
+| `npm run dev` | Starts the app in development mode (hot reload) |
+| `npm run app` | Builds the UI once and starts the app — uses less memory, best for daily use |
 | `npm run setup` | Re-creates / repairs the Python environment |
 | `npm run doctor` | Prints a diagnostic report |
 | `npm run dist` | Builds the Windows installer |

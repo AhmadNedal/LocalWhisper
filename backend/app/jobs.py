@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+
+import psutil
 import tempfile
 import threading
 import time
@@ -242,10 +244,15 @@ class JobManager:
                 job.progress = _span(_TRANSCRIBE_SPAN, p)
                 job.eta_seconds = eta
 
+        spec = self.store.spec(req.model)
+        low_memory = device == "cpu" and psutil.virtual_memory().available < spec.ram_cpu_mb * 1024 * 1024 * 1.5
+        if low_memory:
+            self._warn(job, "low_memory")
         try:
             return self.engine.transcribe(
                 model,
                 audio,
+                low_memory=low_memory,
                 device=device,
                 language=req.language,
                 preset_name=req.preset,

@@ -141,6 +141,49 @@ export interface ExportPdfParams {
   segments: { start: number; end: number; text: string }[];
 }
 
+export interface DbConnectionParams {
+  db_type: "sqlserver" | "oracle" | "mysql" | "postgresql";
+  connection_string: string;
+}
+
+export interface DbInsertParams extends DbConnectionParams {
+  sql: string;
+  pre_sql: string;
+  mode: "chunks" | "segments" | "full";
+  chunk_seconds: number;
+  variables: Record<string, string>;
+  file_name: string;
+  file_path: string;
+  language: string;
+  model: string;
+  duration: number | null;
+  segments: { start: number; end: number; text: string }[];
+}
+
+export interface DbTestResult {
+  ok: boolean;
+  driver: string;
+  serverVersion: string;
+  elapsedMs: number;
+}
+
+export interface DbPreviewResult {
+  rowCount: number;
+  sql: string;
+  preSql: string;
+  used: string[];
+  unknown: string[];
+  rowVariablesInPre: string[];
+  sample: Record<string, unknown>[];
+}
+
+export interface DbExecuteResult {
+  ok: boolean;
+  inserted: number;
+  driver: string;
+  elapsedMs: number;
+}
+
 export class BackendClient {
   constructor(
     private readonly baseUrl: string,
@@ -192,6 +235,15 @@ export class BackendClient {
   }
   cancelJob(id: string) {
     return this.request<{ ok: boolean }>("POST", `/jobs/${id}/cancel`);
+  }
+  dbTest(params: DbConnectionParams) {
+    return this.request<DbTestResult>("POST", "/db/test", params);
+  }
+  dbPreview(params: DbInsertParams) {
+    return this.request<DbPreviewResult>("POST", "/db/preview", params);
+  }
+  dbExecute(params: DbInsertParams) {
+    return this.request<DbExecuteResult>("POST", "/db/execute", params);
   }
   exportPdf(params: ExportPdfParams) {
     return this.request<{ path: string }>("POST", "/export/pdf", params);
