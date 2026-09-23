@@ -1224,3 +1224,113 @@ input.num {
 .youtube .notice {
   margin-top: 0;
 }
+
+/* ---- Cloud providers & archive ------------------------------------------- */
+.pill-cloud {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: transparent;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.cloud-settings {
+  display: flex;
+  flex-direction: column;
+}
+.cloud-settings .notice {
+  margin: 0 0 12px;
+}
+.ok-text {
+  color: var(--ok);
+}
+.field-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.archived-pill {
+  font-weight: 400;
+}
+.archive-modal {
+  width: min(900px, 100%);
+}
+.archive-modal h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.archive-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+.archive-search input {
+  flex: 1;
+}
+.archive-body {
+  min-height: 320px;
+}
+.archive-empty {
+  min-height: 260px;
+}
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.archive-list li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.archive-list li:hover {
+  background: var(--card-2);
+}
+.archive-list li.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.archive-icon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.archive-main {
+  flex: 1;
+  min-width: 0;
+}
+.archive-preview {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-family: var(--font-transcript);
+  font-size: 13.5px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.archive-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+.archive-more {
+  align-self: center;
+  margin-top: 6px;
+}

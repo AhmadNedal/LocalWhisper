@@ -128,6 +128,7 @@ class BackendProcess extends EventEmitter {
           TRANSCRIBER_PARENT_PID: String(process.pid),
           TRANSCRIBER_MODELS_DIR: this.modelsDir(),
           TRANSCRIBER_OUTPUT_DIR: this.outputDir(),
+          TRANSCRIBER_DATA_DIR: app.getPath("userData"), // archive.db lives here
           FFMPEG_PATH: this.resolveFfmpeg(),
         },
       });

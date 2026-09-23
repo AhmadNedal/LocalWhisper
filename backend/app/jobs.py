@@ -48,6 +48,10 @@ class JobRequest:
     preset: str  # fast | balanced | accurate
     arabic_punctuation: bool = True
     youtube_url: str | None = None
+    engine: str = "local"  # local | cloud
+    cloud_provider: str | None = None
+    cloud_model: str | None = None
+    api_key: str = field(default="", repr=False)  # never logged, never returned
 
 
 @dataclass
@@ -68,6 +72,7 @@ class Job:
     warnings: list[str] = field(default_factory=list)
     error: dict[str, str] | None = None
     segments: list[TranscriptSegment] = field(default_factory=list)
+    cloud_chunks: int | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
@@ -85,7 +90,10 @@ class Job:
                 "media": self.media,
                 "device": self.device,
                 "computeType": self.compute_type,
-                "model": self.request.model,
+                "model": self.request.cloud_model if self.request.engine == "cloud" else self.request.model,
+                "engine": self.request.engine,
+                "cloudProvider": self.request.cloud_provider,
+                "cloudChunks": self.cloud_chunks,
                 "language": self.language,
                 "languageProbability": self.language_probability,
                 "download": self.download,
@@ -115,7 +123,12 @@ class JobManager:
         with self._lock:
             if any(j.status == "running" for j in self._jobs.values()):
                 raise AppError(ErrorCode.BUSY, "A transcription is already running")
-            self.store.spec(request.model)  # validate early
+            if request.engine == "cloud":
+                from .cloud import validate_request
+
+                validate_request(request.cloud_provider or "", request.cloud_model or "", request.language, request.api_key)
+            else:
+                self.store.spec(request.model)  # validate early
             # Keep memory bounded: forget finished jobs (the UI holds the result).
             self._jobs = {k: v for k, v in self._jobs.items() if v.status == "running"}
             job = Job(id=uuid.uuid4().hex, request=request)
@@ -181,54 +194,58 @@ class JobManager:
                 with job.lock:
                     job.media["duration"] = audio.duration
 
-            # 3. Model: download once, then always from disk
-            device, compute_type = resolve_device(req.device)
-            spec = self.store.spec(req.model)
-            if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
-                if req.device == "auto":
-                    device, compute_type = "cpu", "int8"
-                    self._warn(job, "gpu_too_small")
-                else:
-                    raise AppError(
-                        ErrorCode.INSUFFICIENT_MEMORY,
-                        f"Model '{spec.id}' needs about {spec.vram_gpu_mb / 1024:.1f} GB of GPU memory "
-                        f"({compute_type}); choose a smaller model or the CPU",
-                    )
-            self._set(job, device=device, compute_type=compute_type)
-            if not self.store.is_downloaded(req.model):
-                self._set(job, stage="downloading_model", stage_progress=0.0)
+            if req.engine == "cloud":
+                # 3-5. Paid cloud provider: upload speech chunks, no local model
+                segments = self._transcribe_cloud(job, audio)
+            else:
+                # 3. Model: download once, then always from disk
+                device, compute_type = resolve_device(req.device)
+                spec = self.store.spec(req.model)
+                if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
+                    if req.device == "auto":
+                        device, compute_type = "cpu", "int8"
+                        self._warn(job, "gpu_too_small")
+                    else:
+                        raise AppError(
+                            ErrorCode.INSUFFICIENT_MEMORY,
+                            f"Model '{spec.id}' needs about {spec.vram_gpu_mb / 1024:.1f} GB of GPU memory "
+                            f"({compute_type}); choose a smaller model or the CPU",
+                        )
+                self._set(job, device=device, compute_type=compute_type)
+                if not self.store.is_downloaded(req.model):
+                    self._set(job, stage="downloading_model", stage_progress=0.0)
 
-                def on_download(done: int, total: int) -> None:
-                    self._set(
-                        job,
-                        download={"done": done, "total": total},
-                        stage_progress=(done / total) if total else 0.0,
-                    )
+                    def on_download(done: int, total: int) -> None:
+                        self._set(
+                            job,
+                            download={"done": done, "total": total},
+                            stage_progress=(done / total) if total else 0.0,
+                        )
 
-                self.store.wait_for_download(req.model, on_download, job.cancel_event.is_set)
+                    self.store.wait_for_download(req.model, on_download, job.cancel_event.is_set)
 
-            if job.cancel_event.is_set():
-                raise Cancelled()
+                if job.cancel_event.is_set():
+                    raise Cancelled()
 
-            # 4. Load model (cached across jobs); fall back to CPU if the GPU fails
-            self._set(job, stage="loading_model", stage_progress=0.0, progress=_PREPARE_SPAN[0])
-            try:
-                model = self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
-            except AppError as err:
-                if device == "cuda" and req.device == "auto" and err.code in (
-                    ErrorCode.CUDA_UNAVAILABLE,
-                    ErrorCode.INSUFFICIENT_MEMORY,
-                    ErrorCode.MODEL_LOAD_FAILED,
-                ):
-                    device, compute_type = "cpu", "int8"
-                    self._warn(job, f"gpu_fallback:{err.detail}")
-                    self._set(job, device=device, compute_type=compute_type)
+                # 4. Load model (cached across jobs); fall back to CPU if the GPU fails
+                self._set(job, stage="loading_model", stage_progress=0.0, progress=_PREPARE_SPAN[0])
+                try:
                     model = self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
-                else:
-                    raise
+                except AppError as err:
+                    if device == "cuda" and req.device == "auto" and err.code in (
+                        ErrorCode.CUDA_UNAVAILABLE,
+                        ErrorCode.INSUFFICIENT_MEMORY,
+                        ErrorCode.MODEL_LOAD_FAILED,
+                    ):
+                        device, compute_type = "cpu", "int8"
+                        self._warn(job, f"gpu_fallback:{err.detail}")
+                        self._set(job, device=device, compute_type=compute_type)
+                        model = self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
+                    else:
+                        raise
 
-            # 5. Transcribe
-            segments = self._transcribe(job, model, audio, device)
+                # 5. Transcribe
+                segments = self._transcribe(job, model, audio, device)
 
             # 6. Finalize
             self._set(job, stage="finalizing", stage_progress=1.0, progress=0.995, eta_seconds=0)
@@ -251,6 +268,7 @@ class JobManager:
                 job.eta_seconds = None
                 job.finished_at = time.time()
         finally:
+            job.request.api_key = ""  # don't keep the user's key in memory
             if audio is not None:
                 audio.close()
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -306,6 +324,44 @@ class JobManager:
                     job.device, job.compute_type, job.segments = "cpu", "int8", []
                 return self._transcribe(job, model, audio, "cpu")
             raise err from exc
+
+    def _transcribe_cloud(self, job: Job, audio: PcmAudio) -> list[TranscriptSegment]:
+        from .cloud import provider, transcribe
+
+        req = job.request
+        prov = provider(req.cloud_provider or "")
+        self._warn(job, "cloud_upload")
+        self._set(
+            job,
+            device="cloud",
+            compute_type=prov.name,
+            language=req.language,
+            language_probability=1.0 if req.language else None,
+            stage="transcribing",
+            stage_progress=0.0,
+            progress=_TRANSCRIBE_SPAN[0],
+        )
+        started = time.time()
+
+        def on_segment(seg: TranscriptSegment, p: float) -> None:
+            elapsed = time.time() - started
+            eta = (elapsed / p) * (1 - p) if p > 0.02 else None
+            with job.lock:
+                job.segments.append(seg)
+                job.stage_progress = p
+                job.progress = _span(_TRANSCRIBE_SPAN, p)
+                job.eta_seconds = eta
+
+        return transcribe(
+            audio,
+            provider_id=prov.id,
+            model=req.cloud_model or "",
+            api_key=req.api_key,
+            language=req.language,
+            cancel=job.cancel_event,
+            on_segment=on_segment,
+            on_planned=lambda n: self._set(job, cloud_chunks=n),
+        )
 
     def _warn(self, job: Job, message: str) -> None:
         with job.lock:

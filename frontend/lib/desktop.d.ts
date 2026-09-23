@@ -36,6 +36,8 @@ export interface DesktopBridge {
   openPath(path: string): Promise<void>;
   openOutputDir(): Promise<void>;
   openModelsDir(): Promise<void>;
+  getSecret(name: string): Promise<string>;
+  setSecret(name: string, value: string): Promise<{ ok: boolean; encrypted: boolean }>;
   loadDbProfiles(): Promise<DbProfile[]>;
   saveDbProfiles(profiles: DbProfile[]): Promise<{ ok: boolean; encrypted: boolean }>;
 }

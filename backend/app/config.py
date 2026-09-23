@@ -53,6 +53,7 @@ def _default_output_dir() -> Path:
 class Settings:
     models_dir: Path
     output_dir: Path
+    data_dir: Path  # archive database etc. (Electron passes its userData folder)
     fonts_dir: Path
     ffmpeg_path: str | None
     auth_token: str
@@ -73,6 +74,7 @@ def _resolve_ffmpeg() -> str | None:
 
 def load_settings() -> Settings:
     models_dir = Path(os.environ.get("TRANSCRIBER_MODELS_DIR") or _default_models_dir())
+    data_dir = Path(os.environ.get("TRANSCRIBER_DATA_DIR") or (models_dir.parent / "data"))
     output_dir = Path(os.environ.get("TRANSCRIBER_OUTPUT_DIR") or _default_output_dir())
     models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,6 +82,7 @@ def load_settings() -> Settings:
     return Settings(
         models_dir=models_dir,
         output_dir=output_dir,
+        data_dir=data_dir,
         fonts_dir=backend_root() / "assets" / "fonts",
         ffmpeg_path=_resolve_ffmpeg(),
         auth_token=os.environ.get("TRANSCRIBER_TOKEN", ""),

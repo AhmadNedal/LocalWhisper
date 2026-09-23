@@ -108,7 +108,10 @@ export interface JobSnapshot {
   progress: number;
   etaSeconds: number | null;
   media: MediaInfo | null;
-  device: "cpu" | "cuda" | null;
+  device: "cpu" | "cuda" | "cloud" | null;
+  engine: "local" | "cloud";
+  cloudProvider: string | null;
+  cloudChunks: number | null;
   computeType: string | null;
   model: string;
   language: string | null;
@@ -146,9 +149,62 @@ export interface YoutubeSubtitles {
   duration: number | null;
 }
 
+export interface CloudModel {
+  id: string;
+  label: string;
+  languages: string[] | null;
+}
+
+export interface CloudProvider {
+  id: string;
+  name: string;
+  url: string;
+  models: CloudModel[];
+  requires_language: boolean;
+  languages: string[] | null;
+  key_url: string;
+}
+
+export interface ArchiveSummary {
+  id: string;
+  title: string;
+  source_type: "file" | "youtube";
+  source: string;
+  created_at: number;
+  updated_at: number;
+  duration: number | null;
+  language: string | null;
+  engine: string | null;
+  model: string | null;
+  segment_count: number;
+  word_count: number;
+  preview: string;
+}
+
+export interface ArchiveItem extends Omit<ArchiveSummary, "preview"> {
+  full_text: string;
+  segments: Segment[];
+}
+
+export interface ArchiveSaveParams {
+  id?: string | null;
+  title: string;
+  source_type: "file" | "youtube";
+  source: string;
+  duration: number | null;
+  language: string | null;
+  engine: string | null;
+  model: string | null;
+  segments: { start: number; end: number; text: string }[];
+}
+
 export interface StartJobParams {
   path: string;
   youtube_url?: string | null;
+  engine?: "local" | "cloud";
+  cloud_provider?: string | null;
+  cloud_model?: string | null;
+  api_key?: string;
   model: string;
   language: string | null;
   device: Device;
@@ -262,6 +318,25 @@ export class BackendClient {
   }
   cancelJob(id: string) {
     return this.request<{ ok: boolean }>("POST", `/jobs/${id}/cancel`);
+  }
+  cloudProviders() {
+    return this.request<{ providers: CloudProvider[] }>("GET", "/cloud/providers").then((r) => r.providers);
+  }
+  cloudTest(provider: string, apiKey: string) {
+    return this.request<{ ok: boolean; provider: string }>("POST", "/cloud/test", { provider, api_key: apiKey });
+  }
+  archiveList(q: string, limit = 50, offset = 0) {
+    const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) });
+    return this.request<{ total: number; items: ArchiveSummary[] }>("GET", `/archive?${params}`);
+  }
+  archiveGet(id: string) {
+    return this.request<ArchiveItem>("GET", `/archive/${encodeURIComponent(id)}`);
+  }
+  archiveSave(params: ArchiveSaveParams) {
+    return this.request<{ id: string; updated_at: number }>("POST", "/archive", params);
+  }
+  archiveDelete(id: string) {
+    return this.request<{ ok: boolean }>("DELETE", `/archive/${encodeURIComponent(id)}`);
   }
   youtubeInspect(url: string) {
     return this.request<YoutubeInfo>("POST", "/youtube/inspect", { url });

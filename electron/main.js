@@ -195,6 +195,39 @@ function registerIpc() {
     return { ok: true, encrypted: canEncrypt };
   });
 
+  // ---- API keys for paid providers ---------------------------------------
+  // One encrypted entry per provider in %APPDATA%\Local Transcriber\secrets.json
+  // (Windows DPAPI via safeStorage). Keys are only handed to the local backend
+  // for the duration of a transcription.
+  const secretsFile = () => path.join(app.getPath("userData"), "secrets.json");
+  const readSecrets = () => {
+    try {
+      return JSON.parse(fs.readFileSync(secretsFile(), "utf8")) || {};
+    } catch {
+      return {};
+    }
+  };
+
+  ipcMain.handle("secrets:get", (_event, /** @type {string} */ name) => {
+    const enc = readSecrets()[String(name)];
+    if (!enc || !safeStorage.isEncryptionAvailable()) return "";
+    try {
+      return safeStorage.decryptString(Buffer.from(enc, "base64"));
+    } catch {
+      return "";
+    }
+  });
+
+  ipcMain.handle("secrets:set", (_event, /** @type {string} */ name, /** @type {string} */ value) => {
+    if (!safeStorage.isEncryptionAvailable()) return { ok: false, encrypted: false };
+    const all = readSecrets();
+    if (value) all[String(name)] = safeStorage.encryptString(String(value)).toString("base64");
+    else delete all[String(name)];
+    fs.mkdirSync(path.dirname(secretsFile()), { recursive: true });
+    fs.writeFileSync(secretsFile(), JSON.stringify(all, null, 2), "utf8");
+    return { ok: true, encrypted: true };
+  });
+
   backend.on("status", (status) => {
     mainWindow?.webContents.send("backend:status", status);
   });

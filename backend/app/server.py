@@ -55,6 +55,27 @@ class JobBody(BaseModel):
     device: Literal["auto", "cpu", "cuda"] = "auto"
     preset: Literal["fast", "balanced", "accurate"] = "balanced"
     arabic_punctuation: bool = True
+    engine: Literal["local", "cloud"] = "local"
+    cloud_provider: str | None = None
+    cloud_model: str | None = None
+    api_key: str = Field(default="", max_length=500, repr=False)
+
+
+class ArchiveBody(BaseModel):
+    id: str | None = None
+    title: str = Field(default="", max_length=500)
+    source_type: Literal["file", "youtube"] = "file"
+    source: str = Field(default="", max_length=4000)
+    duration: float | None = None
+    language: str | None = None
+    engine: str | None = None
+    model: str | None = None
+    segments: list[dict[str, object]] = Field(default_factory=list)
+
+
+class CloudKeyBody(BaseModel):
+    provider: str
+    api_key: str = Field(max_length=500, repr=False)
 
 
 class YoutubeBody(BaseModel):
@@ -144,6 +165,9 @@ def create_app(settings: Settings) -> FastAPI:
     store = ModelStore(settings.models_dir)
     engine = Engine()
     jobs = JobManager(settings, store, engine)
+    from .archive import Archive
+
+    archive = Archive(settings.data_dir / "archive.db")
 
     app = FastAPI(title="Local Transcriber backend", version=__version__, docs_url=None, redoc_url=None)
 
@@ -245,6 +269,10 @@ def create_app(settings: Settings) -> FastAPI:
                 device=body.device,
                 preset=body.preset,
                 arabic_punctuation=body.arabic_punctuation,
+                engine=body.engine,
+                cloud_provider=body.cloud_provider,
+                cloud_model=body.cloud_model,
+                api_key=body.api_key.strip(),
             )
         )
         return job.snapshot()
@@ -257,6 +285,37 @@ def create_app(settings: Settings) -> FastAPI:
     def cancel_job(job_id: str) -> dict[str, bool]:
         jobs.cancel(job_id)
         return {"ok": True}
+
+    # ---- Archive -------------------------------------------------------------------
+    @app.get("/archive")
+    def archive_list(q: str = "", limit: int = 50, offset: int = 0) -> dict[str, object]:
+        return archive.list(q, limit, offset)
+
+    @app.get("/archive/{item_id}")
+    def archive_get(item_id: str) -> dict[str, object]:
+        return archive.get(item_id)
+
+    @app.post("/archive")
+    def archive_save(body: ArchiveBody) -> dict[str, object]:
+        return archive.save(body.model_dump())
+
+    @app.delete("/archive/{item_id}")
+    def archive_delete(item_id: str) -> dict[str, bool]:
+        archive.delete(item_id)
+        return {"ok": True}
+
+    # ---- Paid cloud providers ---------------------------------------------------
+    @app.get("/cloud/providers")
+    def cloud_providers() -> dict[str, object]:
+        from .cloud import list_providers
+
+        return {"providers": list_providers()}
+
+    @app.post("/cloud/test")
+    def cloud_test(body: CloudKeyBody) -> dict[str, object]:
+        from .cloud import test_key
+
+        return test_key(body.provider, body.api_key)
 
     # ---- YouTube ---------------------------------------------------------------
     @app.post("/youtube/inspect")

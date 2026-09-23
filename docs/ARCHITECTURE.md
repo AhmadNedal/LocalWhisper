@@ -35,7 +35,7 @@ This document explains how Local Transcriber works internally. For installation 
 - Electron generates a **random token on every launch** and passes it to both processes. Every request must carry it in the `X-Auth-Token` header, so other programs or web pages on the same PC cannot use the backend.
 - The UI sends **file paths, not file bytes**. Media never passes through the UI and is never uploaded.
 - The renderer runs with `contextIsolation`, `sandbox` and no Node integration. The only native features it can use are the ones exposed by `electron/preload.js` (`window.desktop`).
-- Hugging Face and Next.js telemetry are disabled. Network requests: the one-time model download, and YouTube — only when the user pastes a link.
+- Hugging Face and Next.js telemetry are disabled. Network requests: the one-time model download, YouTube (only when the user pastes a link), and the selected paid provider (only when the user chooses one).
 
 ## Transcription pipeline
 
@@ -88,6 +88,18 @@ Cancellation is cooperative (checked between segments) and kills FFmpeg immediat
 - **Font:** Amiri (covers Arabic and Latin) is embedded, so there are no empty boxes.
 - **Layout:** two-pass layout so the footer can show "page X of Y" in Arabic. The file is written atomically (`.part` then rename).
 
+## Paid cloud providers
+
+`backend/app/cloud.py` supports Cohere Transcribe, OpenAI and Groq with the user's own API key (stored by Electron with `safeStorage`/DPAPI, passed per job, wiped from memory when the job ends).
+
+- Silero VAD (in 10-minute windows) finds speech; regions are merged into ≤ 28 s chunks and encoded as 16 kHz mono WAV (~0.9 MB) — silence is never uploaded or billed, and the 25 MB API limits are never reached.
+- Up to 4 chunks are uploaded in parallel; results are emitted **in order**, each with its chunk's start/end as timestamps (Cohere returns plain text only).
+- 429/5xx are retried with exponential backoff (honouring `Retry-After`); auth, quota and language errors fail fast with a clear message. Cancel returns immediately.
+
+## Archive
+
+`backend/app/archive.py` — SQLite (`archive.db` in the Electron userData folder). The UI saves every finished transcript (debounced, chained so edits update the same row). Search normalizes Arabic (tashkeel, tatweel, alef/ya/ta-marbuta forms) via a SQL function.
+
 ## YouTube
 
 `backend/app/youtube.py` uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). YouTube requires a JavaScript runtime for full support; the `deno` pip package provides it (bundled into the installer under `_internal/deno/`), together with `yt-dlp-ejs`.
@@ -121,6 +133,11 @@ All endpoints require the `X-Auth-Token` header.
 | GET | `/jobs/{id}?since=N` | Progress + new segments since index N |
 | POST | `/jobs/{id}/cancel` | Cancel |
 | POST | `/export/pdf` | Generate a PDF from (edited) segments |
+| GET | `/cloud/providers` | Paid providers and their models |
+| POST | `/cloud/test` | Validate an API key (lists models — nothing billed) |
+| GET | `/archive?q=` | List/search archived transcripts |
+| GET / DELETE | `/archive/{id}` | Open / delete an archived transcript |
+| POST | `/archive` | Create or update an archive entry |
 | POST | `/youtube/inspect` | Video info + available caption tracks |
 | POST | `/youtube/subtitles` | Fetch one caption track as transcript segments |
 | POST | `/db/test` | Test a database connection string |

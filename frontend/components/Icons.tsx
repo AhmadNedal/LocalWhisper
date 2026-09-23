@@ -140,6 +140,24 @@ export const YoutubeIcon = (p: IconProps) => (
     <path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" />
   </Icon>
 );
+export const CloudIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7 18.5h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 7 9.5a4.5 4.5 0 0 0 0 9z" />
+  </Icon>
+);
+export const ArchiveIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="4" width="18" height="4.5" rx="1" />
+    <path d="M5 8.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8.5" />
+    <path d="M10 12.5h4" />
+  </Icon>
+);
+export const KeyIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="15" r="4" />
+    <path d="m10.8 12.2 8.7-8.7M17 6l2.5 2.5M14.5 8.5 16.5 10.5" />
+  </Icon>
+);
 export const WaveIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0" />

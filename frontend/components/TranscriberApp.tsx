@@ -8,6 +8,7 @@ import {
   type ModelInfo,
   type Segment,
   type SystemInfo,
+  type CloudProvider,
   type YoutubeCaption,
   type YoutubeInfo,
 } from "@/lib/api";
@@ -15,9 +16,11 @@ import { isRtlLanguage } from "@/lib/format";
 import { STRINGS, errorMessage, type UiLang } from "@/lib/i18n";
 import { languageName } from "@/lib/languages";
 import { useBackend, usePersistentState } from "@/lib/useBackend";
+import { ArchiveDialog } from "./ArchiveDialog";
+import { secretName } from "./CloudSettings";
 import { DatabaseDialog } from "./DatabaseDialog";
 import { ExportPanel, type ExportOptions } from "./ExportPanel";
-import { AlertIcon, GlobeIcon, RefreshIcon, ShieldIcon, WaveIcon } from "./Icons";
+import { AlertIcon, ArchiveIcon, CloudIcon, GlobeIcon, RefreshIcon, ShieldIcon, WaveIcon } from "./Icons";
 import { MediaPicker } from "./MediaPicker";
 import { ProgressPanel } from "./ProgressPanel";
 import { SettingsPanel, type TranscribeSettings } from "./SettingsPanel";
@@ -32,7 +35,21 @@ const DEFAULT_SETTINGS: TranscribeSettings = {
   device: "auto",
   preset: "balanced",
   arabicPunctuation: true,
+  engine: "local",
+  cloudProvider: "cohere",
+  cloudModel: "cohere-transcribe-arabic-07-2026",
 };
+
+/** What the archive needs to know about the transcript currently shown. */
+type ArchiveMeta = {
+  sourceType: "file" | "youtube";
+  engine: string;
+  model: string | null;
+  language: string | null;
+};
+
+const archiveKey = (title: string, segs: Segment[]) =>
+  `${title}\u0000${segs.map((s) => `${s.start}|${s.end}|${s.text}`).join("\n")}`;
 
 const DEFAULT_EXPORT: ExportOptions = { includeTimestamps: true, includeModel: true, pdfLang: "ar" };
 
@@ -71,6 +88,24 @@ export function TranscriberApp() {
   const [usedCaption, setUsedCaption] = useState<YoutubeCaption | null>(null);
   // Language/model of a transcript that didn't come from a job (YouTube captions)
   const [transcriptMeta, setTranscriptMeta] = useState<{ language: string; model: string } | null>(null);
+  // Paid providers + archive
+  const [cloudProviders, setCloudProviders] = useState<CloudProvider[]>([]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveId, setArchiveId] = useState<string | null>(null);
+  const [archiveMeta, setArchiveMeta] = useState<ArchiveMeta | null>(null);
+  const [openedFromArchive, setOpenedFromArchive] = useState(false);
+  const archiveIdRef = useRef<string | null>(null);
+  const lastArchived = useRef("");
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
+
+  /** Forget the archive link: the next transcript becomes a new archive entry. */
+  const resetArchive = useCallback(() => {
+    archiveIdRef.current = null;
+    lastArchived.current = "";
+    setArchiveId(null);
+    setArchiveMeta(null);
+    setOpenedFromArchive(false);
+  }, []);
   const fetchedSegments = useRef(0);
 
   // Keep <html lang/dir> in sync with the UI language.
@@ -106,8 +141,13 @@ export function TranscriberApp() {
     let cancelled = false;
     (async () => {
       try {
-        const [info, list] = await Promise.all([client.system(), client.models()]);
+        const [info, list, providers] = await Promise.all([
+          client.system(),
+          client.models(),
+          client.cloudProviders().catch(() => [] as CloudProvider[]),
+        ]);
         if (cancelled) return;
+        setCloudProviders(providers);
         setSystem(info);
         setModels(list);
         setSettings((s) => (s.model && list.some((m) => m.id === s.model) ? s : { ...s, model: info.defaultModel }));
@@ -140,6 +180,7 @@ export function TranscriberApp() {
       try {
         const info = await client.probe(path);
         setMedia(info);
+        resetArchive();
         setYtInfo(null);
         setUsedCaption(null);
         setTranscriptMeta(null);
@@ -165,6 +206,7 @@ export function TranscriberApp() {
     try {
       const info = await client.youtubeInspect(url);
       setYtInfo(info);
+      resetArchive();
       setMedia({
         path: info.url,
         name: info.title,
@@ -198,7 +240,10 @@ export function TranscriberApp() {
       setJob(null);
       setSegments(res.segments);
       setUsedCaption(track);
-      setTranscriptMeta({ language: res.language, model: track.kind === "manual" ? t.ytModelManual : t.ytModelAuto });
+      const captionModel = track.kind === "manual" ? t.ytModelManual : t.ytModelAuto;
+      setTranscriptMeta({ language: res.language, model: captionModel });
+      setOpenedFromArchive(false);
+      setArchiveMeta({ sourceType: "youtube", engine: "youtube", model: captionModel, language: res.language });
       setPdfPath(null);
       fetchedSegments.current = 0;
     } catch (err) {
@@ -215,8 +260,19 @@ export function TranscriberApp() {
 
   // ---- Transcription --------------------------------------------------------
   const start = async () => {
-    if (!client || !media || !settings.model) return;
+    if (!client || !media) return;
+    const cloud = settings.engine === "cloud";
+    if (!cloud && !settings.model) return;
+    let apiKey = "";
+    if (cloud) {
+      apiKey = (await window.desktop?.getSecret(secretName(settings.cloudProvider))) ?? "";
+      if (!apiKey) {
+        setBanner({ code: "cloud_auth", detail: "" });
+        return;
+      }
+    }
     setBanner(null);
+    resetArchive();
     setPdfPath(null);
     setPdfError(null);
     setCancelling(false);
@@ -228,11 +284,15 @@ export function TranscriberApp() {
       const snapshot = await client.startJob({
         path: ytInfo ? "" : media.path,
         youtube_url: ytInfo ? ytInfo.url : null,
-        model: settings.model,
+        model: settings.model ?? "",
         language: settings.language === "auto" ? null : settings.language,
         device: settings.device,
         preset: settings.preset,
         arabic_punctuation: settings.arabicPunctuation,
+        engine: cloud ? "cloud" : "local",
+        cloud_provider: cloud ? settings.cloudProvider : null,
+        cloud_model: cloud ? settings.cloudModel : null,
+        api_key: apiKey,
       });
       setJob(snapshot);
     } catch (err) {
@@ -294,6 +354,91 @@ export function TranscriberApp() {
     setSegments((prev) => prev.map((s) => (s.id === id ? { ...s, text } : s)));
     setPdfPath(null);
   }, []);
+
+  // ---- Archive ----------------------------------------------------------------
+  // A finished job becomes archivable; captions/archive entries set this directly.
+  const jobStatus = job?.status;
+  useEffect(() => {
+    if (jobStatus !== "completed" || !job) return;
+    setArchiveMeta({
+      sourceType: ytInfo ? "youtube" : "file",
+      engine: job.engine ?? "local",
+      model: job.model,
+      language: job.language,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobStatus, job?.id]);
+
+  // Auto-save (debounced) whenever the transcript or its edits change.
+  // Saves are chained so the first save's id is reused by later ones.
+  useEffect(() => {
+    if (!client || !media || !archiveMeta || running || !segments.length) return;
+    const title = media.name;
+    const key = archiveKey(title, segments);
+    if (key === lastArchived.current) return;
+    const snapshot = segments.filter((s) => s.text.trim()).map(({ start, end, text }) => ({ start, end, text }));
+    const timer = setTimeout(() => {
+      saveChain.current = saveChain.current.then(async () => {
+        try {
+          const res = await client.archiveSave({
+            id: archiveIdRef.current,
+            title,
+            source_type: archiveMeta.sourceType,
+            source: media.path,
+            duration: media.duration,
+            language: archiveMeta.language,
+            engine: archiveMeta.engine,
+            model: archiveMeta.model,
+            segments: snapshot,
+          });
+          archiveIdRef.current = res.id;
+          lastArchived.current = key;
+          setArchiveId(res.id);
+        } catch {
+          /* archive is best-effort; the transcript stays on screen */
+        }
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [client, media, archiveMeta, running, segments]);
+
+  const openArchived = async (id: string) => {
+    if (!client || running) return;
+    try {
+      const item = await client.archiveGet(id);
+      setArchiveOpen(false);
+      setYtInfo(null);
+      setUsedCaption(null);
+      setJob(null);
+      setPdfPath(null);
+      setPdfError(null);
+      setMedia({
+        path: item.source,
+        name: item.title,
+        size_bytes: 0,
+        duration: item.duration,
+        has_video: item.source_type === "youtube",
+        has_audio: true,
+        audio_codec: null,
+        container: "archive",
+      });
+      setSegments(item.segments);
+      setTranscriptMeta({ language: item.language ?? "", model: item.model ?? "" });
+      archiveIdRef.current = item.id;
+      lastArchived.current = archiveKey(item.title, item.segments);
+      setArchiveId(item.id);
+      setArchiveMeta({
+        sourceType: item.source_type,
+        engine: item.engine ?? "local",
+        model: item.model,
+        language: item.language,
+      });
+      setOpenedFromArchive(true);
+      fetchedSegments.current = 0;
+    } catch (err) {
+      setBanner(toBanner(err));
+    }
+  };
 
   // ---- PDF export -------------------------------------------------------------
   const exportPdf = async (saveAs: boolean) => {
@@ -366,9 +511,22 @@ export function TranscriberApp() {
           </div>
         </div>
         <div className="titlebar-actions">
-          <span className="pill pill-privacy">
-            <ShieldIcon size={14} /> {t.privacyBadge}
-          </span>
+          <button className="btn btn-subtle" onClick={() => setArchiveOpen(true)} disabled={!client}>
+            <ArchiveIcon size={16} /> {t.archive}
+          </button>
+          {settings.engine === "cloud" && cloudProviders.length ? (
+            <span className="pill pill-cloud">
+              <CloudIcon size={14} />{" "}
+              {t.cloudBadge.replace(
+                "{provider}",
+                cloudProviders.find((p) => p.id === settings.cloudProvider)?.name ?? settings.cloudProvider,
+              )}
+            </span>
+          ) : (
+            <span className="pill pill-privacy">
+              <ShieldIcon size={14} /> {t.privacyBadge}
+            </span>
+          )}
           <button className="btn btn-subtle" onClick={() => setLang(lang === "ar" ? "en" : "ar")}>
             <GlobeIcon size={16} /> {t.switchLang}
           </button>
@@ -448,11 +606,18 @@ export function TranscriberApp() {
             t={t}
             lang={lang}
             job={job}
-            canStart={Boolean(client && media && settings.model && !running)}
+            canStart={Boolean(
+              client &&
+                media &&
+                media.container !== "archive" &&
+                (settings.engine === "cloud" || settings.model) &&
+                !running,
+            )}
             cancelling={cancelling}
             generatingPdf={pdfGenerating}
             isYoutube={Boolean(ytInfo)}
-            readyNote={usedCaption ? t.ytLoaded : null}
+            readyNote={openedFromArchive ? t.archiveOpened : usedCaption ? t.ytLoaded : null}
+            archived={Boolean(archiveId)}
             onStart={start}
             onCancel={cancel}
           />
@@ -466,6 +631,8 @@ export function TranscriberApp() {
             disabled={!client || running}
             onDownload={downloadModel}
             onDelete={deleteModel}
+            client={client}
+            cloudProviders={cloudProviders}
           />
         </div>
         <div className="main">
@@ -484,6 +651,20 @@ export function TranscriberApp() {
           />
         </div>
       </main>
+
+      {archiveOpen && client ? (
+        <ArchiveDialog
+          t={t}
+          lang={lang}
+          client={client}
+          activeId={archiveId}
+          onOpen={openArchived}
+          onDeleted={(id) => {
+            if (id === archiveIdRef.current) resetArchive();
+          }}
+          onClose={() => setArchiveOpen(false)}
+        />
+      ) : null}
 
       {dbOpen && client && media ? (
         <DatabaseDialog

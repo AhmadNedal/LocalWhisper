@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld("desktop", {
   openOutputDir: () => ipcRenderer.invoke("shell:openOutputDir"),
   openModelsDir: () => ipcRenderer.invoke("shell:openModelsDir"),
 
+  /** Encrypted API keys for paid providers. @param {string} name */
+  getSecret: (name) => ipcRenderer.invoke("secrets:get", name),
+  /** @param {string} name @param {string} value (empty string deletes) */
+  setSecret: (name, value) => ipcRenderer.invoke("secrets:set", name, value),
+
   /** Saved database profiles (connection strings are encrypted with Windows DPAPI). */
   loadDbProfiles: () => ipcRenderer.invoke("db:loadProfiles"),
   /** @param {unknown[]} profiles */

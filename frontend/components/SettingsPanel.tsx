@@ -1,6 +1,7 @@
 "use client";
 
-import type { Device, ModelInfo, Preset, SystemInfo } from "@/lib/api";
+import type { BackendClient, CloudProvider, Device, ModelInfo, Preset, SystemInfo } from "@/lib/api";
+import { CloudSettings } from "./CloudSettings";
 import { formatBytes, formatMegabytes } from "@/lib/format";
 import type { Strings, UiLang } from "@/lib/i18n";
 import { languageOptions } from "@/lib/languages";
@@ -12,6 +13,9 @@ export interface TranscribeSettings {
   device: Device;
   preset: Preset;
   arabicPunctuation: boolean;
+  engine: "local" | "cloud";
+  cloudProvider: string;
+  cloudModel: string;
 }
 
 interface Props {
@@ -24,6 +28,8 @@ interface Props {
   disabled: boolean;
   onDownload: (id: string) => void;
   onDelete: (id: string) => void;
+  client: BackendClient | null;
+  cloudProviders: CloudProvider[];
 }
 
 function Dots({ value, label }: { value: number; label: string }) {
@@ -36,7 +42,20 @@ function Dots({ value, label }: { value: number; label: string }) {
   );
 }
 
-export function SettingsPanel({ t, lang, settings, onChange, system, models, disabled, onDownload, onDelete }: Props) {
+export function SettingsPanel({
+  t,
+  lang,
+  settings,
+  onChange,
+  system,
+  models,
+  disabled,
+  onDownload,
+  onDelete,
+  client,
+  cloudProviders,
+}: Props) {
+  const isCloud = settings.engine === "cloud" && cloudProviders.length > 0;
   const devices = system?.devices;
   const cuda = devices?.cuda_available ?? false;
   const gpuGood = devices?.gpu_recommended ?? false;
@@ -51,6 +70,47 @@ export function SettingsPanel({ t, lang, settings, onChange, system, models, dis
   return (
     <section className="card settings">
       <h2 className="card-title">{t.settings}</h2>
+
+      {/* ---- Engine: local Whisper or a paid cloud provider ---------------- */}
+      <div className="field">
+        <label>{t.engine}</label>
+        <div className="segmented" role="radiogroup" aria-label={t.engine}>
+          <button
+            role="radio"
+            aria-checked={!isCloud}
+            className={!isCloud ? "is-active" : ""}
+            disabled={disabled}
+            onClick={() => onChange({ engine: "local" })}
+          >
+            {t.engineLocal}
+          </button>
+          <button
+            role="radio"
+            aria-checked={isCloud}
+            className={isCloud ? "is-active" : ""}
+            disabled={disabled || cloudProviders.length === 0}
+            onClick={() => onChange({ engine: "cloud" })}
+          >
+            {t.engineCloud}
+          </button>
+        </div>
+        {!isCloud ? <p className="hint">{t.engineLocalHint}</p> : null}
+      </div>
+
+      {isCloud ? (
+        <CloudSettings
+          t={t}
+          lang={lang}
+          client={client}
+          providers={cloudProviders}
+          providerId={settings.cloudProvider}
+          modelId={settings.cloudModel}
+          language={settings.language}
+          disabled={disabled}
+          onChange={onChange}
+        />
+      ) : (
+        <>
 
       {/* ---- Model ------------------------------------------------------ */}
       <div className="field">
@@ -134,6 +194,9 @@ export function SettingsPanel({ t, lang, settings, onChange, system, models, dis
         <p className="hint muted">{t.modelFirstUse}</p>
       </div>
 
+        </>
+      )}
+
       {/* ---- Language --------------------------------------------------- */}
       <div className="field">
         <label htmlFor="language">{t.language}</label>
@@ -152,6 +215,8 @@ export function SettingsPanel({ t, lang, settings, onChange, system, models, dis
         </select>
       </div>
 
+      {isCloud ? null : (
+        <>
       {/* ---- Device ----------------------------------------------------- */}
       <div className="field">
         <label>{t.device}</label>
@@ -236,6 +301,8 @@ export function SettingsPanel({ t, lang, settings, onChange, system, models, dis
         />
         <span>{t.arabicPunctuation}</span>
       </label>
+        </>
+      )}
     </section>
   );
 }

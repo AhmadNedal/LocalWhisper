@@ -16,6 +16,8 @@ interface Props {
   isYoutube: boolean;
   /** Status shown when no job has run (e.g. captions were loaded from YouTube). */
   readyNote?: string | null;
+  /** Shown as a small "saved to archive" badge. */
+  archived?: boolean;
   onStart: () => void;
   onCancel: () => void;
 }
@@ -24,6 +26,7 @@ const STEPS: Stage[] = ["downloading_media", "extracting_audio", "downloading_mo
 
 function stepState(step: Stage, job: JobSnapshot, isYoutube: boolean): "done" | "active" | "pending" | "skipped" {
   if (step === "downloading_media" && !isYoutube) return "skipped";
+  if (job.engine === "cloud" && (step === "downloading_model" || step === "loading_model")) return "skipped";
   if (job.status === "completed") return step === "downloading_model" && !job.download ? "skipped" : "done";
   // YouTube jobs download first, then probe the downloaded file.
   const order: Stage[] = isYoutube
@@ -45,6 +48,7 @@ export function ProgressPanel({
   generatingPdf,
   isYoutube,
   readyNote,
+  archived,
   onStart,
   onCancel,
 }: Props) {
@@ -76,6 +80,11 @@ export function ProgressPanel({
       <div className="status-line" aria-live="polite">
         <span className={`status-dot ${job?.status ?? (readyNote ? "completed" : "idle")} ${generatingPdf ? "running" : ""}`} />
         <span className="status-text">{stageLabel}</span>
+        {archived && !running ? (
+          <span className="pill pill-ok archived-pill">
+            <CheckIcon size={11} /> {t.archiveSaved}
+          </span>
+        ) : null}
         {job ? (
           <span className="status-pct" dir="ltr">
             {pct}%
@@ -150,7 +159,9 @@ export function ProgressPanel({
               <div className="wide">
                 <dt>{t.runningOn}</dt>
                 <dd dir="ltr">
-                  {job.device === "cuda" ? "GPU" : "CPU"} · {job.computeType} · {job.model}
+                  {job.device === "cloud"
+                    ? `☁ ${job.computeType} · ${job.model}${job.cloudChunks ? ` · ${job.cloudChunks} chunks` : ""}`
+                    : `${job.device === "cuda" ? "GPU" : "CPU"} · ${job.computeType} · ${job.model}`}
                 </dd>
               </div>
             ) : null}

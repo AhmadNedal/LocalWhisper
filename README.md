@@ -29,6 +29,8 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Quick start](#quick-start)
 - [How to use](#how-to-use)
 - [Choosing a model](#choosing-a-model)
+- [Paid providers (Cohere, OpenAI, Groq)](#paid-providers-cohere-openai-groq)
+- [Archive](#archive)
 - [YouTube videos](#youtube-videos)
 - [Insert into a database](#insert-into-a-database)
 - [GPU (NVIDIA) support](#gpu-nvidia-support)
@@ -42,12 +44,14 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 
 ## Features
 
-- 🔒 **100% local** — your files are never uploaded. No accounts, no API keys, no subscriptions.
+- 🔒 **100% local by default** — with local Whisper your files are never uploaded. No accounts, no API keys, no subscriptions.
 - 📴 **Works offline** — the AI model is downloaded once, then everything runs without internet.
 - 🇸🇦 **Arabic first** — right-to-left interface, Arabic typography, dialect-friendly models, and ~99 other languages with auto-detection.
 - ⚡ **Fast** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + CTranslate2, automatic NVIDIA GPU acceleration, batched decoding, silence skipping.
 - 🎬 **Any common format** — MP4, MKV, AVI, MOV, WEBM, MP3, WAV, M4A, FLAC and more (drag & drop supported).
 - ✍️ **Live, editable transcript** — see text appear in real time, search it, fix it, switch to a reading view.
+- ☁️ **Optional paid providers** — Cohere Transcribe, OpenAI or Groq with your own API key.
+- 🗂️ **Archive** — every transcript saved automatically, searchable, reopenable.
 - ▶️ **YouTube links** — uses the video's existing captions when available, otherwise downloads only the audio and transcribes it.
 - 🗄️ **Insert into your database** — SQL Server, Oracle, MySQL or PostgreSQL, with your own SQL statement.
 - 📄 **Proper Arabic PDF export** — connected letters, correct RTL order, mixed Arabic/English and numbers, optional timestamps.
@@ -133,6 +137,36 @@ That's it. The app window opens after a few seconds.
 - Each model is downloaded **once** and stored in the `models/` folder. After that it works offline.
 - You can pre-download a model with its **Download** button, or delete it with the 🗑️ icon.
 - If transcription is slow on your PC, try `small` with the **Fastest** priority.
+
+---
+
+## Paid providers (Cohere, OpenAI, Groq)
+
+Besides local Whisper, you can transcribe with a paid cloud provider using **your own API key**. Billing is directly between you and the provider — the app never handles payment.
+
+| Provider | Models | Notes |
+|---|---|---|
+| **Cohere Transcribe** | `cohere-transcribe-arabic-07-2026` (Arabic), `cohere-transcribe-03-2026` (14 languages) | Requires choosing the spoken language (no auto-detect) |
+| **OpenAI** | `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | |
+| **Groq** | `whisper-large-v3-turbo`, `whisper-large-v3` | Very fast |
+
+1. In **Transcription settings → Transcription engine**, choose **Paid provider**.
+2. Pick the provider and model, paste your API key, click **Test** (a free check — nothing is transcribed).
+3. Choose the spoken language and click **Start Transcription** as usual.
+
+- The key is stored **encrypted with Windows DPAPI** on your PC and is sent only to that provider.
+- Only the **speech parts** of the audio are uploaded (silence is skipped), as short chunks sent in parallel. Each chunk's position in the original file gives the timestamps — even for providers that return none — and no file-size limit is ever hit.
+- When a paid provider is selected, the header shows **“Cloud: audio is uploaded to …”** so it's always clear where your audio goes.
+
+---
+
+## Archive
+
+Every transcript is saved automatically in a local archive — files, YouTube links, local Whisper or paid providers — and your edits are saved too.
+
+- Click **Archive** in the top bar to browse, **search** (titles and text; Arabic diacritics and letter variants are ignored), **open** or **delete** transcripts.
+- An opened transcript can be edited, exported to PDF or inserted into a database like a new one.
+- The archive is a SQLite file in `%APPDATA%\Local Transcriber\archive.db` and never leaves your PC.
 
 ---
 
@@ -247,6 +281,7 @@ The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and
 | “No speech was detected” | The file has no audible speech (music/silence) or no audio track. |
 | PDF can't be saved | Close the PDF if it's open in another program and export again. |
 | YouTube link fails / “confirm you're not a bot” | Run `npm run update:youtube`, wait a little and retry. Private, members-only and age-restricted videos can't be fetched. |
+| Paid provider: “API key is invalid” / “quota exhausted” | Check the key with **Test**, and your balance/plan in the provider's dashboard. Cohere needs a language selected (not Auto Detect). |
 | Anything else | Check `%APPDATA%\Local Transcriber\logs\backend.log` and run `npm run doctor`. |
 
 ---
@@ -287,7 +322,8 @@ For how it works internally (architecture, security model, performance), see **[
 - Your media files are **read from your disk only** — they are never uploaded.
 - Transcripts and PDFs stay on your computer.
 - No analytics, no telemetry, no accounts, no API keys.
-- Internet is used only for the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran), and — when **you** paste a YouTube link — to fetch that video's captions or audio from YouTube.
+- With a **paid provider** selected, the speech audio is uploaded to that provider (you choose this explicitly; the header shows it).
+- Otherwise, internet is used only for the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran), and — when **you** paste a YouTube link — to fetch that video's captions or audio from YouTube.
 - The internal backend listens on `127.0.0.1` only and is protected by a random per-launch token.
 
 ---
