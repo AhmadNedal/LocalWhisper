@@ -209,6 +209,98 @@ def inspect(url: str) -> VideoInfo:
     )
 
 
+def pick_caption(info: VideoInfo, language: str | None) -> CaptionTrack | None:
+    """Best caption track for unattended use (batch queue).
+
+    With a chosen language, only tracks in that language are used (channel
+    captions first, then YouTube's automatic ones); otherwise the video's own
+    language is preferred. Returns None when nothing suitable exists.
+    """
+    wanted = (language or "").lower() or (info.language or "").lower() or None
+    manual = [c for c in info.captions if c.kind == "manual"]
+    auto = [c for c in info.captions if c.kind == "auto"]
+    if wanted:
+        for group in (manual, auto):
+            match = next((c for c in group if _base_lang(c.lang) == wanted), None)
+            if match:
+                return match
+        return None if language else (auto[0] if auto else None)
+    return auto[0] if auto else (manual[0] if manual else None)
+
+
+# ---------------------------------------------------------------- playlists
+_PLAYLIST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
+_HIDDEN_TITLES = {"[private video]", "[deleted video]", "[unavailable video]"}
+
+
+def playlist_id(url: str) -> str | None:
+    """The ``list=`` id of a YouTube link, if it points to a playlist."""
+    url = (url or "").strip()
+    if not re.match(r"^https?://", url, re.I):
+        url = "https://" + url
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() not in _YOUTUBE_HOSTS:
+        return None
+    pid = (parse_qs(parsed.query).get("list") or [""])[0]
+    # Radio/"Mix" lists (RD…) are endless and personal: not a course playlist.
+    if pid and _PLAYLIST_ID_RE.match(pid) and not pid.startswith("RD"):
+        return pid
+    return None
+
+
+@dataclass
+class PlaylistEntry:
+    id: str
+    url: str
+    title: str
+    duration: float | None
+
+
+def inspect_playlist(url: str) -> dict[str, Any]:
+    """List a playlist's videos without downloading anything (one quick request)."""
+    pid = playlist_id(url)
+    if not pid:
+        raise AppError(ErrorCode.YOUTUBE_INVALID_URL, "Not a YouTube playlist link")
+    import yt_dlp
+
+    opts = _base_options({"skip_download": True, "extract_flat": "in_playlist", "noplaylist": False})
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/playlist?list={pid}", download=False)
+    except Exception as exc:  # noqa: BLE001
+        raise _classify(exc) from exc
+    if not info:
+        raise AppError(ErrorCode.YOUTUBE_FAILED, "No information returned")
+    entries: list[PlaylistEntry] = []
+    seen: set[str] = set()
+    for e in info.get("entries") or []:
+        if not e:
+            continue
+        vid = str(e.get("id") or "")
+        title = str(e.get("title") or "").strip()
+        if not _ID_RE.match(vid) or vid in seen or title.lower() in _HIDDEN_TITLES:
+            continue
+        if e.get("live_status") in ("is_live", "is_upcoming"):
+            continue
+        seen.add(vid)
+        entries.append(
+            PlaylistEntry(
+                id=vid,
+                url=f"https://www.youtube.com/watch?v={vid}",
+                title=title or vid,
+                duration=float(e["duration"]) if e.get("duration") else None,
+            )
+        )
+    if not entries:
+        raise AppError(ErrorCode.YOUTUBE_UNAVAILABLE, "The playlist is empty, private, or all its videos are unavailable")
+    return {
+        "id": pid,
+        "title": info.get("title") or pid,
+        "channel": info.get("channel") or info.get("uploader") or "",
+        "entries": [asdict(e) for e in entries],
+    }
+
+
 # ---------------------------------------------------------------- subtitles
 def parse_json3(raw: str | bytes) -> list[tuple[float, float, str]]:
     """Parse YouTube's json3 caption format into (start, end, text)."""

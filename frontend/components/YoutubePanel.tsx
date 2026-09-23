@@ -5,7 +5,7 @@ import type { YoutubeCaption, YoutubeInfo } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import type { Strings, UiLang } from "@/lib/i18n";
 import { languageName } from "@/lib/languages";
-import { AlertIcon, CheckIcon, PlayIcon, YoutubeIcon } from "./Icons";
+import { AlertIcon, CheckIcon, PlayIcon, QueueIcon, YoutubeIcon } from "./Icons";
 
 interface Props {
   t: Strings;
@@ -18,6 +18,18 @@ interface Props {
   captionLoading: string | null;
   onInspect: (url: string) => void;
   onUseCaption: (track: YoutubeCaption) => void;
+  /** A playlist link: offer to add all its videos to the batch queue. */
+  onPlaylist: (url: string) => void;
+}
+
+/** Link to a YouTube playlist (not a personal "Mix")? */
+export function isPlaylistUrl(url: string): boolean {
+  return /[?&]list=(?!RD)[A-Za-z0-9_-]{10,}/.test(url) && /youtu\.?be/i.test(url);
+}
+
+/** A playlist page link with no specific video in it. */
+function isPlaylistOnly(url: string): boolean {
+  return isPlaylistUrl(url) && !/[?&]v=[A-Za-z0-9_-]{11}/.test(url) && !/youtu\.be\/[A-Za-z0-9_-]{11}/i.test(url);
 }
 
 function captionLabel(track: YoutubeCaption, lang: UiLang): string {
@@ -27,14 +39,29 @@ function captionLabel(track: YoutubeCaption, lang: UiLang): string {
 }
 
 /** Paste a YouTube link → use its existing captions, or transcribe it with Whisper. */
-export function YoutubePanel({ t, lang, info, loading, disabled, usedCaption, captionLoading, onInspect, onUseCaption }: Props) {
+export function YoutubePanel({
+  t,
+  lang,
+  info,
+  loading,
+  disabled,
+  usedCaption,
+  captionLoading,
+  onInspect,
+  onUseCaption,
+  onPlaylist,
+}: Props) {
   const [url, setUrl] = useState("");
+  const playlist = isPlaylistUrl(url);
   const manual = info?.captions.filter((c) => c.kind === "manual") ?? [];
   const auto = info?.captions.filter((c) => c.kind === "auto") ?? [];
 
-  const submit = () => {
-    if (url.trim() && !loading && !disabled) onInspect(url.trim());
+  const go = (value: string) => {
+    if (!value || loading || disabled) return;
+    if (isPlaylistOnly(value)) onPlaylist(value);
+    else onInspect(value);
   };
+  const submit = () => go(url.trim());
 
   return (
     <section className="card youtube">
@@ -55,7 +82,7 @@ export function YoutubePanel({ t, lang, info, loading, disabled, usedCaption, ca
             if (/youtu\.?be/i.test(pasted)) {
               e.preventDefault();
               setUrl(pasted);
-              if (!loading && !disabled) onInspect(pasted);
+              go(pasted);
             }
           }}
         />
@@ -63,6 +90,18 @@ export function YoutubePanel({ t, lang, info, loading, disabled, usedCaption, ca
           {loading ? t.ytFetching : t.ytFetch}
         </button>
       </div>
+
+      {playlist ? (
+        <div className="notice info yt-playlist">
+          <QueueIcon size={16} />
+          <div>
+            <div>{t.ytPlaylistDetected}</div>
+            <button className="btn btn-small btn-accent" disabled={disabled} onClick={() => onPlaylist(url.trim())}>
+              {t.ytPlaylistAdd}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {info ? (
         <div className="yt-body">

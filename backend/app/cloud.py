@@ -36,6 +36,12 @@ log = logging.getLogger(__name__)
 
 CHUNK_TARGET_S = 20.0  # merge speech regions up to ~20 s (readable timestamps)
 CHUNK_MAX_S = 28.0  # hard cap per upload (≈0.9 MB WAV — far below every limit)
+# Models that return their own segment timestamps (verbose_json) get long
+# chunks instead: ~50× fewer requests, which matters with per-minute limits
+# (Groq's free plan allows 20 requests a minute). 10 min of 16 kHz mono WAV
+# is 19.2 MB — under the 25 MB upload limit.
+LONG_CHUNK_TARGET_S = 540.0
+LONG_CHUNK_MAX_S = 600.0
 PARALLEL_REQUESTS = 4
 MAX_RETRIES = 5
 REQUEST_TIMEOUT = 120.0
@@ -46,6 +52,7 @@ class CloudModel:
     id: str
     label: str
     languages: tuple[str, ...] | None = None  # None → any language
+    segments: bool = False  # returns per-segment timestamps (verbose_json)
 
 
 @dataclass(frozen=True)
@@ -90,7 +97,7 @@ PROVIDERS: dict[str, CloudProvider] = {
             models=(
                 CloudModel("gpt-4o-transcribe", "gpt-4o-transcribe"),
                 CloudModel("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"),
-                CloudModel("whisper-1", "whisper-1"),
+                CloudModel("whisper-1", "whisper-1", segments=True),
             ),
             requires_language=False,
             languages=None,
@@ -102,8 +109,8 @@ PROVIDERS: dict[str, CloudProvider] = {
             name="Groq",
             url="https://api.groq.com/openai/v1/audio/transcriptions",
             models=(
-                CloudModel("whisper-large-v3-turbo", "whisper-large-v3-turbo"),
-                CloudModel("whisper-large-v3", "whisper-large-v3"),
+                CloudModel("whisper-large-v3-turbo", "whisper-large-v3-turbo — fastest", segments=True),
+                CloudModel("whisper-large-v3", "whisper-large-v3", segments=True),
             ),
             requires_language=False,
             languages=None,
@@ -133,8 +140,14 @@ class Chunk:
     end: int
 
 
-def plan_chunks(audio: PcmAudio, cancel: threading.Event | None = None) -> list[Chunk]:
-    """Speech-only chunks of ≤ CHUNK_MAX_S seconds, cut at pauses.
+def plan_chunks(
+    audio: PcmAudio,
+    cancel: threading.Event | None = None,
+    target_s: float = CHUNK_TARGET_S,
+    max_s: float = CHUNK_MAX_S,
+    max_gap_s: float = 2.0,
+) -> list[Chunk]:
+    """Speech-only chunks of ≤ ``max_s`` seconds, cut at pauses.
 
     VAD runs over 10-minute windows so memory stays flat for long recordings.
     """
@@ -162,8 +175,8 @@ def plan_chunks(audio: PcmAudio, cancel: threading.Event | None = None) -> list[
 
     # Merge neighbouring regions into chunks of ~CHUNK_TARGET_S.
     chunks: list[Chunk] = []
-    target = int(CHUNK_TARGET_S * SAMPLE_RATE)
-    hard = int(CHUNK_MAX_S * SAMPLE_RATE)
+    target = int(target_s * SAMPLE_RATE)
+    hard = int(max_s * SAMPLE_RATE)
     cur_start: int | None = None
     cur_end = 0
     for start, end in regions:
@@ -171,7 +184,7 @@ def plan_chunks(audio: PcmAudio, cancel: threading.Event | None = None) -> list[
             cur_start, cur_end = start, end
             continue
         gap = start - cur_end
-        if (end - cur_start) <= target and gap < 2 * SAMPLE_RATE:
+        if (end - cur_start) <= target and gap < max_gap_s * SAMPLE_RATE:
             cur_end = end
         else:
             chunks.append(Chunk(len(chunks), cur_start, min(cur_end, cur_start + hard)))
@@ -215,14 +228,19 @@ def _post_chunk(
     language: str | None,
     wav: bytes,
     cancel: threading.Event,
-) -> str:
+    verbose: bool = False,
+    vocabulary: str = "",
+) -> str | list[tuple[float, float, str]]:
+    """Upload one chunk. Returns its text, or (start, end, text) segments when ``verbose``."""
     import httpx
 
     data = {"model": model}
     if language:
         data["language"] = language
     if prov.id != "cohere":
-        data["response_format"] = "json"
+        data["response_format"] = "verbose_json" if verbose else "json"
+        if vocabulary:
+            data["prompt"] = vocabulary  # OpenAI / Groq: spelling hints for names and terms
     delay = 1.5
     for attempt in range(MAX_RETRIES + 1):
         if cancel.is_set():
@@ -247,6 +265,12 @@ def _post_chunk(
                 payload = resp.json()
             except ValueError:
                 return resp.text.strip()
+            if verbose and isinstance(payload.get("segments"), list):
+                return [
+                    (float(sg.get("start") or 0), float(sg.get("end") or 0), str(sg.get("text") or "").strip())
+                    for sg in payload["segments"]
+                    if str(sg.get("text") or "").strip()
+                ]
             return str(payload.get("text") or "").strip()
 
         retryable = resp.status_code == 429 or resp.status_code >= 500
@@ -286,18 +310,23 @@ def transcribe(
     cancel: threading.Event,
     on_segment: Callable[[TranscriptSegment, float], None],
     on_planned: Callable[[int], None] | None = None,
+    vocabulary: str = "",
 ) -> list[TranscriptSegment]:
     """Upload speech chunks in parallel; emit segments in order as they complete."""
     import httpx
 
     prov = validate_request(provider_id, model, language, api_key)
-    chunks = plan_chunks(audio, cancel)
+    verbose = next((m.segments for m in prov.models if m.id == model), False)
+    if verbose:
+        chunks = plan_chunks(audio, cancel, LONG_CHUNK_TARGET_S, LONG_CHUNK_MAX_S, max_gap_s=8.0)
+    else:
+        chunks = plan_chunks(audio, cancel)
     if not chunks:
         raise AppError(ErrorCode.NO_SPEECH, "No speech was detected in the audio")
     if on_planned:
         on_planned(len(chunks))
 
-    results: dict[int, str] = {}
+    results: dict[int, str | list[tuple[float, float, str]]] = {}
     segments: list[TranscriptSegment] = []
     next_to_emit = 0
     recent: list[str] = []
@@ -306,21 +335,27 @@ def transcribe(
         nonlocal next_to_emit, recent
         while next_to_emit in results:
             chunk = chunks[next_to_emit]
-            text = clean_text(results.pop(next_to_emit))
+            result = results.pop(next_to_emit)
             next_to_emit += 1
-            if not text or _is_hallucination(text, 0.0, 0.0):
-                continue
-            if len(recent) >= 2 and recent[-1] == text and recent[-2] == text:
-                continue
-            recent = (recent + [text])[-2:]
-            seg = TranscriptSegment(
-                id=len(segments),
-                start=round(chunk.start / SAMPLE_RATE, 2),
-                end=round(chunk.end / SAMPLE_RATE, 2),
-                text=text,
-            )
-            segments.append(seg)
-            on_segment(seg, next_to_emit / len(chunks))
+            offset = chunk.start / SAMPLE_RATE
+            chunk_end = chunk.end / SAMPLE_RATE
+            # Whole-chunk text → one segment; verbose results → their own timed segments.
+            parts = [(0.0, chunk_end - offset, result)] if isinstance(result, str) else result
+            for start, end, raw in parts:
+                text = clean_text(raw)
+                if not text or _is_hallucination(text, 0.0, 0.0):
+                    continue
+                if len(recent) >= 2 and recent[-1] == text and recent[-2] == text:
+                    continue
+                recent = (recent + [text])[-2:]
+                seg = TranscriptSegment(
+                    id=len(segments),
+                    start=round(offset + max(0.0, start), 2),
+                    end=round(min(chunk_end, offset + max(start, end)), 2),
+                    text=text,
+                )
+                segments.append(seg)
+                on_segment(seg, next_to_emit / len(chunks))
 
     limits = httpx.Limits(max_connections=PARALLEL_REQUESTS, max_keepalive_connections=PARALLEL_REQUESTS)
     client = httpx.Client(limits=limits)
@@ -335,7 +370,7 @@ def transcribe(
             while queue and len(pending) < PARALLEL_REQUESTS:
                 chunk = queue.pop(0)
                 wav = encode_wav(audio, chunk)
-                fut = pool.submit(_post_chunk, client, prov, model, api_key, language, wav, cancel)
+                fut = pool.submit(_post_chunk, client, prov, model, api_key, language, wav, cancel, verbose, vocabulary)
                 pending[fut] = chunk.index
             done, _ = wait(list(pending), timeout=0.5, return_when=FIRST_COMPLETED)
             for fut in done:

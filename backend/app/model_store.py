@@ -137,7 +137,12 @@ class ModelStore:
                 return self._downloads[model_id]
             state = DownloadState(model_id, "downloading", total_bytes=spec.download_mb * 1024 * 1024)
             self._downloads[model_id] = state
-            thread = threading.Thread(target=self._download, args=(spec, state), daemon=True, name=f"dl-{model_id}")
+            thread = threading.Thread(
+                target=self._download,
+                args=(spec.repo, self.path_for(spec.id), _MODEL_FILES, state),
+                daemon=True,
+                name=f"dl-{model_id}",
+            )
             self._threads[model_id] = thread
             thread.start()
             return state
@@ -164,25 +169,66 @@ class ModelStore:
             on_progress(done, total)
             time.sleep(0.4)
 
-    def _download(self, spec: ModelSpec, state: DownloadState) -> None:
+    # ------------------------------------------------ extra (non-Whisper) models
+    def extra_path(self, key: str) -> Path:
+        return self.models_dir / "extra" / key
+
+    def extra_downloaded(self, key: str) -> bool:
+        path = self.extra_path(key)
+        return (path / _MARKER).is_file() and (path / "model.bin").is_file()
+
+    def extra_state(self, key: str) -> DownloadState:
+        with self._lock:
+            return self._downloads.get(f"extra:{key}") or DownloadState(
+                model=key, status="done" if self.extra_downloaded(key) else "idle"
+            )
+
+    def start_extra_download(self, key: str, repo: str, patterns: list[str], size_mb: int) -> DownloadState:
+        """Download another CTranslate2 model (e.g. the offline translator) the same way."""
+        dl_key = f"extra:{key}"
+        with self._lock:
+            if self.extra_downloaded(key):
+                state = DownloadState(key, "done")
+                self._downloads[dl_key] = state
+                return state
+            thread = self._threads.get(dl_key)
+            if thread and thread.is_alive():
+                return self._downloads[dl_key]
+            state = DownloadState(key, "downloading", total_bytes=size_mb * 1024 * 1024)
+            self._downloads[dl_key] = state
+            thread = threading.Thread(
+                target=self._download, args=(repo, self.extra_path(key), patterns, state), daemon=True, name=f"dl-{key}"
+            )
+            self._threads[dl_key] = thread
+            thread.start()
+            return state
+
+    def delete_extra(self, key: str) -> None:
+        with self._lock:
+            thread = self._threads.get(f"extra:{key}")
+            if thread and thread.is_alive():
+                raise AppError(ErrorCode.BUSY, "Model is currently downloading")
+            shutil.rmtree(self.extra_path(key), ignore_errors=True)
+            self._downloads.pop(f"extra:{key}", None)
+
+    def _download(self, repo: str, target: Path, patterns: list[str], state: DownloadState) -> None:
         from faster_whisper.utils import disabled_tqdm
         from huggingface_hub import HfApi, snapshot_download
 
-        target = self.path_for(spec.id)
         target.mkdir(parents=True, exist_ok=True)
 
         # Exact size (for an accurate progress bar) when the Hub is reachable.
         try:
-            info = HfApi().model_info(spec.repo, files_metadata=True)
+            info = HfApi().model_info(repo, files_metadata=True)
             exact = sum(
                 (s.size or 0)
                 for s in (info.siblings or [])
-                if any(Path(s.rfilename).match(p) for p in _MODEL_FILES)
+                if any(Path(s.rfilename).match(p) for p in patterns)
             )
             if exact > 0:
                 state.total_bytes = exact
         except Exception as exc:  # noqa: BLE001 - offline / proxy: keep estimate
-            log.info("Could not fetch model metadata for %s: %s", spec.id, exc)
+            log.info("Could not fetch model metadata for %s: %s", repo, exc)
 
         stop_polling = threading.Event()
 
@@ -196,15 +242,15 @@ class ModelStore:
         poller.start()
         try:
             snapshot_download(
-                spec.repo,
+                repo,
                 local_dir=str(target),
-                allow_patterns=_MODEL_FILES,
+                allow_patterns=patterns,
                 tqdm_class=disabled_tqdm,  # progress comes from the poller above
             )
             if not (target / "model.bin").is_file():
                 raise RuntimeError("model.bin missing after download")
             (target / _MARKER).write_text(
-                json.dumps({"repo": spec.repo, "downloaded_at": time.time()}), encoding="utf-8"
+                json.dumps({"repo": repo, "downloaded_at": time.time()}), encoding="utf-8"
             )
             # Remove Hugging Face's bookkeeping folder; the model itself is all we need.
             shutil.rmtree(target / ".cache", ignore_errors=True)
@@ -212,7 +258,7 @@ class ModelStore:
                 state.status = "done"
                 state.downloaded_bytes = state.total_bytes
         except Exception as exc:  # noqa: BLE001
-            log.exception("Model download failed: %s", spec.id)
+            log.exception("Model download failed: %s", repo)
             with self._lock:
                 state.status = "error"
                 state.error = AppError(

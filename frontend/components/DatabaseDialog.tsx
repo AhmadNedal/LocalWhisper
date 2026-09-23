@@ -8,6 +8,7 @@ import {
   type DbPreviewResult,
   type DbTestResult,
   type Segment,
+  type AiSummary, type QuizData,
 } from "@/lib/api";
 import type { DbMode, DbProfile, DbType } from "@/lib/desktop";
 import { errorMessage, type Strings, type UiLang } from "@/lib/i18n";
@@ -23,6 +24,11 @@ interface Props {
   language: string;
   model: string;
   duration: number | null;
+  translation?: { start: number; end: number; text: string }[] | null;
+  translationLanguage?: string;
+  summary?: AiSummary | null;
+  quiz?: QuizData | null;
+  course?: string | null;
   onClose: () => void;
 }
 
@@ -63,6 +69,22 @@ const SQL_EXAMPLES: Record<DbType, { pre: string; sql: string }> = {
 
 const ROW_VARS = ["text", "start_seconds", "end_seconds", "start_time", "end_time", "segment_index"];
 const FILE_VARS = ["file_name", "file_path", "language", "model", "duration_seconds", "segment_count", "full_text", "transcribed_at"];
+/** Filled from the translation, the AI summary and the archive (NULL when missing). */
+const EXTRA_VARS: { name: string; needs: "translation" | "summary" | "course" | "quiz" }[] = [
+  { name: "translation", needs: "translation" },
+  { name: "text_en", needs: "translation" },
+  { name: "full_translation", needs: "translation" },
+  { name: "full_text_en", needs: "translation" },
+  { name: "translation_language", needs: "translation" },
+  { name: "summary", needs: "summary" },
+  { name: "key_points", needs: "summary" },
+  { name: "chapters", needs: "summary" },
+  { name: "chapters_json", needs: "summary" },
+  { name: "keywords", needs: "summary" },
+  { name: "quiz", needs: "quiz" },
+  { name: "quiz_json", needs: "quiz" },
+  { name: "course", needs: "course" },
+];
 const LAST_PROFILE_KEY = "db-last-profile";
 
 function newProfile(): DbProfile {
@@ -84,7 +106,23 @@ function toErr(err: unknown): Err {
   return { code: "internal", detail: err instanceof Error ? err.message : String(err) };
 }
 
-export function DatabaseDialog({ t, lang, client, segments, fileName, filePath, language, model, duration, onClose }: Props) {
+export function DatabaseDialog({
+  t,
+  lang,
+  client,
+  segments,
+  fileName,
+  filePath,
+  language,
+  model,
+  duration,
+  translation,
+  translationLanguage,
+  summary,
+  quiz,
+  course,
+  onClose,
+}: Props) {
   const [profiles, setProfiles] = useState<DbProfile[]>([]);
   const [form, setForm] = useState<DbProfile>(newProfile);
   const [showConn, setShowConn] = useState(false);
@@ -145,8 +183,13 @@ export function DatabaseDialog({ t, lang, client, segments, fileName, filePath, 
       model,
       duration,
       segments: segments.filter((s) => s.text.trim()).map(({ start, end, text }) => ({ start, end, text })),
+      translation: translation ?? null,
+      translation_language: translationLanguage ?? "",
+      summary: summary ?? null,
+      quiz: quiz ?? null,
+      course: course ?? "",
     }),
-    [form, fileName, filePath, language, model, duration, segments],
+    [form, fileName, filePath, language, model, duration, segments, translation, translationLanguage, summary, quiz, course],
   );
 
   // ---- actions --------------------------------------------------------------
@@ -480,6 +523,40 @@ export function DatabaseDialog({ t, lang, client, segments, fileName, filePath, 
                   {name}
                 </button>
               ))}
+              <span className="chip-group-label">{t.dbVarsExtra}</span>
+              {EXTRA_VARS.map(({ name, needs }) => {
+                const available =
+                  needs === "translation"
+                    ? Boolean(translation?.length)
+                    : needs === "summary"
+                      ? Boolean(summary)
+                      : needs === "quiz"
+                        ? Boolean(quiz)
+                        : Boolean(course);
+                return (
+                  <button
+                    key={name}
+                    className={`chip${available ? "" : " chip-off"}`}
+                    dir="ltr"
+                    title={
+                      available
+                        ? undefined
+                        : t[
+                            needs === "translation"
+                              ? "dbVarNeedsTranslation"
+                              : needs === "summary"
+                                ? "dbVarNeedsSummary"
+                                : needs === "quiz"
+                                  ? "dbVarNeedsQuiz"
+                                  : "dbVarNeedsCourse"
+                          ]
+                    }
+                    onClick={() => insertVariable(name)}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
               {customNames.map((name) => (
                 <button key={`c-${name}`} className="chip chip-custom" dir="ltr" onClick={() => insertVariable(name)}>
                   {name}

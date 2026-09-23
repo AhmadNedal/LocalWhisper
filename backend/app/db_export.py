@@ -24,6 +24,8 @@ Supported engines and drivers (all installed with pip, no system client needed):
 
 from __future__ import annotations
 
+import json
+
 import logging
 import re
 import time
@@ -43,7 +45,16 @@ CONNECT_TIMEOUT = 15
 QUERY_TIMEOUT = 300
 
 # Variables the user can reference in SQL (besides their own custom variables).
-ROW_VARIABLES = ("text", "start_seconds", "end_seconds", "start_time", "end_time", "segment_index")
+ROW_VARIABLES = (
+    "text",
+    "start_seconds",
+    "end_seconds",
+    "start_time",
+    "end_time",
+    "segment_index",
+    "translation",  # translated text of the same time range (NULL when there is no translation)
+    "text_en",  # = translation when it is English
+)
 FILE_VARIABLES = (
     "file_name",
     "file_path",
@@ -53,6 +64,22 @@ FILE_VARIABLES = (
     "segment_count",
     "full_text",
     "transcribed_at",
+    # Translation / AI summary / archive (NULL when not available)
+    "full_translation",
+    "translation_language",
+    "full_text_en",
+    "summary",
+    "key_points",
+    "chapters",
+    "chapters_json",
+    "keywords",
+    "quiz",
+    "quiz_json",
+    "course",
+    # Per lesson when inserting a whole course or from the queue (1-based order in the course)
+    "lesson_index",
+    "lesson_title",
+    "youtube_id",
 )
 BUILTIN_VARIABLES = ROW_VARIABLES + FILE_VARIABLES
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
@@ -67,6 +94,12 @@ class TranscriptPayload:
     language: str
     model: str
     duration: float | None
+    translation: list[ExportSegment] | None = None
+    translation_language: str = ""
+    summary: dict[str, Any] | None = None
+    course: str = ""
+    lesson_index: int | None = None
+    quiz: dict[str, Any] | None = None
 
 
 @dataclass
@@ -218,6 +251,7 @@ def build_rows(req: DbRequest, payload: TranscriptPayload) -> tuple[dict[str, An
         "duration_seconds": round(float(duration), 2),
         "full_text": whole,
         "transcribed_at": datetime.now().replace(microsecond=0),
+        **_extra_file_values(payload),
     }
     for name, value in req.variables.items():
         common[name] = _coerce(value)
@@ -230,14 +264,19 @@ def build_rows(req: DbRequest, payload: TranscriptPayload) -> tuple[dict[str, An
         units = _chunk_segments(segments, max(1, int(req.chunk_seconds)))
 
     common["segment_count"] = len(units)
+    trans = [t for t in (payload.translation or []) if t.text.strip()]
+    is_en = payload.translation_language.lower().startswith("en")
     integer_times = req.mode == "chunks"
     rows = []
     for idx, unit in enumerate(units, start=1):
         start = int(unit.start) if integer_times else round(unit.start, 2)
         end = int(round(unit.end)) if integer_times else round(unit.end, 2)
+        translated = _translation_for(unit, trans, req.mode)
         rows.append(
             {
                 **common,
+                "translation": translated,
+                "text_en": translated if is_en else None,
                 "text": unit.text.strip(),
                 "start_seconds": start,
                 "end_seconds": end,
@@ -247,6 +286,78 @@ def build_rows(req: DbRequest, payload: TranscriptPayload) -> tuple[dict[str, An
             }
         )
     return common, rows
+
+
+def _extra_file_values(payload: TranscriptPayload) -> dict[str, Any]:
+    """File-level values from the translation, the AI summary and the archive."""
+    trans = [t for t in (payload.translation or []) if t.text.strip()]
+    full_translation = " ".join(t.text.strip() for t in trans) or None
+    is_en = payload.translation_language.lower().startswith("en")
+    summary = payload.summary or {}
+    chapters = [c for c in (summary.get("chapters") or []) if isinstance(c, dict)]
+    key_points = [str(k).strip() for k in (summary.get("key_points") or []) if str(k).strip()]
+    keywords = [str(k).strip() for k in (summary.get("keywords") or []) if str(k).strip()]
+    return {
+        "full_translation": full_translation,
+        "translation_language": payload.translation_language or None if trans else None,
+        "full_text_en": full_translation if is_en else None,
+        "summary": str(summary.get("summary") or "").strip() or None,
+        "key_points": "\n".join(f"• {k}" for k in key_points) or None,
+        "chapters": "\n".join(
+            f"{format_timestamp(float(c.get('start') or 0))} {str(c.get('title') or '').strip()}" for c in chapters
+        )
+        or None,
+        "chapters_json": json.dumps(
+            [
+                {"start": round(float(c.get("start") or 0), 2), "title": c.get("title", ""), "summary": c.get("summary", "")}
+                for c in chapters
+            ],
+            ensure_ascii=False,
+        )
+        if chapters
+        else None,
+        "keywords": ", ".join(keywords) or None,
+        "quiz": _quiz_text(payload.quiz) or None,
+        "quiz_json": json.dumps(payload.quiz.get("questions") or [], ensure_ascii=False) if payload.quiz else None,
+        "course": payload.course.strip() or None,
+        "lesson_index": payload.lesson_index,
+        "lesson_title": _lesson_title(payload.file_name),
+        "youtube_id": _youtube_id(payload.file_path),
+    }
+
+
+def _quiz_text(data: dict[str, Any] | None) -> str:
+    from .assistant import quiz_text
+
+    return quiz_text(data)
+
+
+def _lesson_title(name: str) -> str | None:
+    """File name without its extension (a YouTube title is kept as is)."""
+    name = (name or "").strip()
+    stem, dot, ext = name.rpartition(".")
+    if dot and stem and 1 <= len(ext) <= 5 and ext.isalnum():
+        return stem.strip()
+    return name or None
+
+
+def _youtube_id(source: str) -> str | None:
+    m = re.search(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})", source or "")
+    return m.group(1) if m else None
+
+
+def _translation_for(unit: ExportSegment, trans: list[ExportSegment], mode: str) -> str | None:
+    """Translated text covering the same time range as ``unit``."""
+    if not trans:
+        return None
+    if mode == "full":
+        return " ".join(t.text.strip() for t in trans)
+    if mode == "segments":
+        best = min(trans, key=lambda t: abs(t.start - unit.start))
+        return best.text.strip() if abs(best.start - unit.start) < 0.05 else None
+    # chunks: every translated segment that starts inside this chunk
+    parts = [t.text.strip() for t in trans if unit.start - 0.01 <= t.start < unit.end - 0.01]
+    return " ".join(parts) or None
 
 
 def _validate_variables(variables: dict[str, str]) -> None:

@@ -1,0 +1,6 @@
+{
+  "_comment": "Mandatory sign-in for the desktop app, against WindowsAppLoginBackend. Set apiBaseUrl to the address where the service is published. 'enabled' is only honoured in development; an installed copy always requires sign-in.",
+  "enabled": true,
+  "apiBaseUrl": "https://transcript.runasp.net",
+  "rememberDays": 7
+}

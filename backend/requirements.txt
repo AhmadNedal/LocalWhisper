@@ -11,6 +11,9 @@ uvicorn>=0.30,<1
 fpdf2>=2.8.0,<3
 uharfbuzz>=0.40
 
+# Free offline Arabic → English translation (Opus-MT model run by CTranslate2)
+sentencepiece>=0.2
+
 # RAM / CPU detection and parent-process watchdog
 psutil>=5.9
 numpy>=1.24

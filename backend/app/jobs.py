@@ -40,6 +40,45 @@ _TRANSCRIBE_SPAN = (0.12, 0.99)
 
 
 @dataclass
+class PreparedMedia:
+    """Audio already extracted ahead of time (the batch queue prepares the next file)."""
+
+    pcm_path: Path
+    media: dict[str, Any]
+    tmp_dir: Path  # owned by the job from now on: deleted when it ends
+
+
+def prepare_media(
+    settings: Settings,
+    path: str,
+    youtube_url: str | None,
+    tmp_dir: Path,
+    cancel: threading.Event,
+    on_download: Any = None,
+    on_extract: Any = None,
+    on_probed: Any = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Download (YouTube) → probe → extract 16 kHz mono PCM. Returns (pcm path, media info)."""
+    source_path = path
+    yt_title = None
+    if youtube_url:
+        from .youtube import download_audio
+
+        media_file, yt_info = download_audio(youtube_url, tmp_dir, on_download or (lambda *a: None), cancel)
+        source_path = str(media_file)
+        yt_title = yt_info.get("title")
+    info = probe(source_path)
+    media = info.to_dict()
+    if youtube_url:
+        media.update({"path": youtube_url, "name": yt_title or info.name, "has_video": True})
+    if on_probed:
+        on_probed(media)
+    pcm_path = tmp_dir / "audio.s16le"
+    extract_audio(settings.ffmpeg_path, source_path, pcm_path, info.duration, on_extract or (lambda p: None), cancel)
+    return pcm_path, media
+
+
+@dataclass
 class JobRequest:
     path: str  # local file, or the YouTube URL when youtube_url is set
     model: str
@@ -52,6 +91,8 @@ class JobRequest:
     cloud_provider: str | None = None
     cloud_model: str | None = None
     api_key: str = field(default="", repr=False)  # never logged, never returned
+    prepared: PreparedMedia | None = field(default=None, repr=False)
+    vocabulary: str = ""  # comma-separated names / terms (custom vocabulary)
 
 
 @dataclass
@@ -145,19 +186,67 @@ class JobManager:
             for key, value in changes.items():
                 setattr(job, key, value)
 
+    def _resolve_device(self, job: Job) -> tuple[str, str]:
+        req = job.request
+        device, compute_type = resolve_device(req.device)
+        spec = self.store.spec(req.model)
+        if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
+            if req.device == "auto":
+                device, compute_type = "cpu", "int8"
+                self._warn(job, "gpu_too_small")
+            else:
+                raise AppError(
+                    ErrorCode.INSUFFICIENT_MEMORY,
+                    f"Model '{spec.id}' needs about {spec.vram_gpu_mb / 1024:.1f} GB of GPU memory "
+                    f"({compute_type}); choose a smaller model or the CPU",
+                )
+        return device, compute_type
+
+    def _warm_up(self, job: Job, device: str, compute_type: str) -> threading.Thread | None:
+        """Load the model in the background while the audio is being prepared.
+
+        Loading a large model from disk takes 10–60 s on a laptop; doing it in
+        parallel with the download / FFmpeg step removes that wait. Any error is
+        ignored here — the real load below reports it properly.
+        """
+        req = job.request
+        if not self.store.is_downloaded(req.model):
+            self.store.start_download(req.model)  # start the one-time download right away too
+            return None
+        spec = self.store.spec(req.model)
+
+        def load() -> None:
+            try:
+                self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
+            except BaseException:  # noqa: BLE001
+                log.info("Model warm-up failed; it will be retried", exc_info=True)
+
+        thread = threading.Thread(target=load, daemon=True, name=f"warm-{job.id[:8]}")
+        thread.start()
+        return thread
+
     def _run(self, job: Job) -> None:
         req = job.request
         tmp_dir = Path(tempfile.mkdtemp(prefix="local-transcriber-"))
         audio: PcmAudio | None = None
+        warm: threading.Thread | None = None
         try:
-            # 0. YouTube: download only the audio stream into the temp folder
-            source_path = req.path
-            extract_span = _EXTRACT_SPAN
-            yt_title = None
-            if req.youtube_url:
-                from .youtube import download_audio
+            device = compute_type = ""
+            if req.engine != "cloud":
+                device, compute_type = self._resolve_device(job)
+                self._set(job, device=device, compute_type=compute_type)
+                warm = self._warm_up(job, device, compute_type)
 
-                self._set(job, stage="downloading_media", stage_progress=0.0)
+            if req.prepared is not None:
+                # 0-2. Prepared ahead of time by the batch queue
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                tmp_dir = req.prepared.tmp_dir
+                pcm_path = req.prepared.pcm_path
+                self._set(job, media=dict(req.prepared.media), stage="extracting_audio", stage_progress=1.0,
+                          progress=_EXTRACT_SPAN[1])
+            else:
+                extract_span = (_DOWNLOAD_SPAN[1], _DOWNLOAD_SPAN[1] + 0.04) if req.youtube_url else _EXTRACT_SPAN
+                self._set(job, stage="downloading_media" if req.youtube_url else "probing", stage_progress=0.0)
 
                 def on_download_media(p: float, done: int, total: int) -> None:
                     self._set(
@@ -167,28 +256,23 @@ class JobManager:
                         download={"done": done, "total": total},
                     )
 
-                media_file, yt_info = download_audio(req.youtube_url, tmp_dir, on_download_media, job.cancel_event)
-                source_path = str(media_file)
-                yt_title = yt_info.get("title")
-                extract_span = (_DOWNLOAD_SPAN[1], _DOWNLOAD_SPAN[1] + 0.04)
-                self._set(job, download=None)
+                def on_probed(media: dict[str, Any]) -> None:
+                    self._set(job, media=media, download=None, stage="extracting_audio", stage_progress=0.0)
 
-            # 1. Probe (headers only)
-            self._set(job, stage="probing")
-            info = probe(source_path)
-            media = info.to_dict()
-            if req.youtube_url:
-                media.update({"path": req.youtube_url, "name": yt_title or info.name, "has_video": True})
-            self._set(job, media=media)
+                def on_extract(p: float) -> None:
+                    self._set(job, stage_progress=p, progress=_span(extract_span, p))
 
-            # 2. Extract audio once, directly at 16 kHz mono
-            self._set(job, stage="extracting_audio", stage_progress=0.0)
-            pcm_path = tmp_dir / "audio.s16le"
-
-            def on_extract(p: float) -> None:
-                self._set(job, stage_progress=p, progress=_span(extract_span, p))
-
-            extract_audio(self.settings.ffmpeg_path, source_path, pcm_path, info.duration, on_extract, job.cancel_event)
+                # 0-2. (YouTube: download the audio only) → probe → extract 16 kHz mono once
+                pcm_path, _media = prepare_media(
+                    self.settings,
+                    req.path,
+                    req.youtube_url,
+                    tmp_dir,
+                    job.cancel_event,
+                    on_download_media,
+                    on_extract,
+                    on_probed,
+                )
             audio = PcmAudio(pcm_path)
             if job.media is not None and not job.media.get("duration"):
                 with job.lock:
@@ -199,19 +283,7 @@ class JobManager:
                 segments = self._transcribe_cloud(job, audio)
             else:
                 # 3. Model: download once, then always from disk
-                device, compute_type = resolve_device(req.device)
                 spec = self.store.spec(req.model)
-                if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
-                    if req.device == "auto":
-                        device, compute_type = "cpu", "int8"
-                        self._warn(job, "gpu_too_small")
-                    else:
-                        raise AppError(
-                            ErrorCode.INSUFFICIENT_MEMORY,
-                            f"Model '{spec.id}' needs about {spec.vram_gpu_mb / 1024:.1f} GB of GPU memory "
-                            f"({compute_type}); choose a smaller model or the CPU",
-                        )
-                self._set(job, device=device, compute_type=compute_type)
                 if not self.store.is_downloaded(req.model):
                     self._set(job, stage="downloading_model", stage_progress=0.0)
 
@@ -227,8 +299,13 @@ class JobManager:
                 if job.cancel_event.is_set():
                     raise Cancelled()
 
-                # 4. Load model (cached across jobs); fall back to CPU if the GPU fails
+                # 4. Load model (usually already warm; cached across jobs); CPU fallback if the GPU fails
                 self._set(job, stage="loading_model", stage_progress=0.0, progress=_PREPARE_SPAN[0])
+                if warm is not None:
+                    while warm.is_alive():
+                        if job.cancel_event.is_set():
+                            raise Cancelled()
+                        warm.join(0.2)
                 try:
                     model = self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
                 except AppError as err:
@@ -299,6 +376,7 @@ class JobManager:
                 model,
                 audio,
                 low_memory=low_memory,
+                vocabulary=req.vocabulary,
                 device=device,
                 language=req.language,
                 preset_name=req.preset,
@@ -361,6 +439,7 @@ class JobManager:
             cancel=job.cancel_event,
             on_segment=on_segment,
             on_planned=lambda n: self._set(job, cloud_chunks=n),
+            vocabulary=req.vocabulary,
         )
 
     def _warn(self, job: Job, message: str) -> None:

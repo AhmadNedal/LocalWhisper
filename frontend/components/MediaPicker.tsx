@@ -4,7 +4,8 @@ import { useState } from "react";
 import type { MediaInfo } from "@/lib/api";
 import { formatBytes, formatDuration } from "@/lib/format";
 import type { Strings, UiLang } from "@/lib/i18n";
-import { FileMediaIcon, UploadIcon } from "./Icons";
+import { FileMediaIcon, FolderIcon, QueueIcon, UploadIcon } from "./Icons";
+import { FileName } from "./FileName";
 
 interface Props {
   t: Strings;
@@ -14,21 +15,41 @@ interface Props {
   disabled: boolean;
   onPick: () => void;
   onDropPath: (path: string) => void;
+  /** Several files or folders → batch queue. */
+  onAddMany: (paths: string[]) => void;
+  onPickFolder: () => void;
+  onPickMany: () => void;
 }
 
 /** Large drag & drop area; turns into a compact file card once a file is chosen. */
-export function MediaPicker({ t, lang, media, loading, disabled, onPick, onDropPath }: Props) {
+export function MediaPicker({
+  t,
+  lang,
+  media,
+  loading,
+  disabled,
+  onPick,
+  onDropPath,
+  onAddMany,
+  onPickFolder,
+  onPickMany,
+}: Props) {
   const [dragging, setDragging] = useState(false);
 
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault();
     setDragging(false);
     if (disabled) return;
-    const file = event.dataTransfer.files?.[0];
-    if (!file || !window.desktop) return;
-    // Only the local path is used; the file is never read into the UI.
-    const path = window.desktop.getPathForFile(file);
-    if (path) onDropPath(path);
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (!files.length || !window.desktop) return;
+    // Only local paths are used; files are never read into the UI.
+    const paths = files.map((f) => window.desktop!.getPathForFile(f)).filter(Boolean);
+    const hasFolder = Array.from(event.dataTransfer.items ?? []).some(
+      (item) => item.kind === "file" && item.webkitGetAsEntry?.()?.isDirectory,
+    );
+    // A folder or several files → transcribe them all through the queue.
+    if (paths.length > 1 || hasFolder) onAddMany(paths);
+    else if (paths[0]) onDropPath(paths[0]);
   };
 
   const dropHandlers = {
@@ -47,8 +68,8 @@ export function MediaPicker({ t, lang, media, loading, disabled, onPick, onDropP
           <FileMediaIcon size={26} />
         </div>
         <div className="file-main">
-          <div className="file-name" dir="auto" title={media.path}>
-            {media.name}
+          <div className="file-name" title={media.path}>
+            <FileName name={media.name} />
           </div>
           <div className="file-meta">
             <span>
@@ -103,6 +124,15 @@ export function MediaPicker({ t, lang, media, loading, disabled, onPick, onDropP
       >
         {t.chooseFile}
       </button>
+      <div className="dropzone-more" onClick={(e) => e.stopPropagation()}>
+        <button className="btn btn-small" disabled={disabled || loading} onClick={onPickFolder}>
+          <FolderIcon size={14} /> {t.pickFolder}
+        </button>
+        <button className="btn btn-small" disabled={disabled || loading} onClick={onPickMany}>
+          <QueueIcon size={14} /> {t.pickMany}
+        </button>
+      </div>
+      <div className="dropzone-hint">{t.pickManyHint}</div>
     </section>
   );
 }

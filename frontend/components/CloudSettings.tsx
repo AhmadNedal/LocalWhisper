@@ -1,5 +1,6 @@
 "use client";
 
+import { keyState } from "@/lib/keys";
 import { useEffect, useState } from "react";
 import { ApiError, type BackendClient, type CloudProvider } from "@/lib/api";
 import { errorMessage, type Strings, type UiLang } from "@/lib/i18n";
@@ -27,14 +28,16 @@ export function CloudSettings({ t, lang, client, providers, providerId, modelId,
   const [show, setShow] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "saved" | "error"; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [builtin, setBuiltin] = useState(false);
 
   // Load the stored key whenever the provider changes.
   useEffect(() => {
     if (!provider) return;
     setStatus(null);
-    window.desktop?.getSecret(secretName(provider.id)).then((k) => {
-      setKey(k);
-      setSavedKey(k);
+    keyState(secretName(provider.id)).then(({ stored, builtin: has }) => {
+      setKey(stored);
+      setSavedKey(stored);
+      setBuiltin(has);
     });
   }, [provider]);
 
@@ -163,6 +166,7 @@ export function CloudSettings({ t, lang, client, providers, providerId, modelId,
             </button>
           ) : null}
         </div>
+        {builtin && !savedKey && !status ? <p className="hint ok-text">{t.builtinKeyHint}</p> : null}
         {status ? (
           <p className={`hint ${status.kind === "error" ? "warn" : "ok-text"}`}>
             {status.kind === "error" ? <AlertIcon size={13} /> : <CheckIcon size={13} />} {status.text}

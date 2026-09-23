@@ -16,6 +16,8 @@ export interface TranscribeSettings {
   engine: "local" | "cloud";
   cloudProvider: string;
   cloudModel: string;
+  /** Names and terms to spell correctly (comma or line separated). */
+  vocabulary?: string;
 }
 
 interface Props {
@@ -303,6 +305,21 @@ export function SettingsPanel({
       </label>
         </>
       )}
+
+      <div className="field vocab-field">
+        <label htmlFor="vocabulary">{t.vocabularyTitle}</label>
+        <textarea
+          id="vocabulary"
+          dir="auto"
+          rows={2}
+          spellCheck={false}
+          placeholder={t.vocabularyPlaceholder}
+          value={settings.vocabulary ?? ""}
+          disabled={disabled}
+          onChange={(e) => onChange({ vocabulary: e.target.value })}
+        />
+        <p className="hint">{t.vocabularyHint}</p>
+      </div>
     </section>
   );
 }

@@ -15,3 +15,5 @@ models/*
 release/
 .env*
 data/
+# Built-in API keys (bundled into the installer, never committed)
+builtin-keys.json

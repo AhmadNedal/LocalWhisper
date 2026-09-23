@@ -37,7 +37,7 @@ export function useBackend(): { state: BackendState; retry: () => void } {
 
   const state = useMemo<BackendState>(() => {
     if (!hasDesktop) return { kind: "no-desktop" };
-    if (!status || status.state === "starting" || status.state === "stopped") return { kind: "starting" };
+    if (!status || status.state === "starting" || status.state === "stopped" || status.state === "locked") return { kind: "starting" };
     if (status.state === "error") return { kind: "error", code: status.code, message: status.message };
     return { kind: "ready", client: new BackendClient(status.url, status.token) };
   }, [status, hasDesktop]);

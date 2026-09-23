@@ -24,6 +24,8 @@ class ErrorCode(str, Enum):
     NO_SPEECH = "no_speech"
     TRANSCRIPTION_FAILED = "transcription_failed"
     PDF_FAILED = "pdf_failed"
+    EXPORT_FAILED = "export_failed"
+    BACKUP_INVALID = "backup_invalid"
     DB_DRIVER_MISSING = "db_driver_missing"
     DB_CONNECT_FAILED = "db_connect_failed"
     DB_QUERY_FAILED = "db_query_failed"
@@ -40,6 +42,12 @@ class ErrorCode(str, Enum):
     CLOUD_FAILED = "cloud_failed"
     CLOUD_LANGUAGE_REQUIRED = "cloud_language_required"
     CLOUD_LANGUAGE_UNSUPPORTED = "cloud_language_unsupported"
+    SUMMARY_FAILED = "summary_failed"
+    SUMMARY_MODEL = "summary_model"
+    SUMMARY_TOO_LONG = "summary_too_long"
+    TRANSLATE_FAILED = "translate_failed"
+    TRANSLATE_UNSUPPORTED = "translate_unsupported"
+    TRANSLATE_SAME_LANGUAGE = "translate_same_language"
     CANCELLED = "cancelled"
     BUSY = "busy"
     INVALID_REQUEST = "invalid_request"
@@ -72,7 +80,18 @@ def classify_exception(exc: BaseException) -> AppError:
 
     text = str(exc)
     lowered = text.lower()
-    if "out of memory" in lowered or "cudaerrormemoryallocation" in lowered or "bad_alloc" in lowered:
+    if any(
+        k in lowered
+        for k in (
+            "out of memory",
+            "cudaerrormemoryallocation",
+            "bad_alloc",
+            "failed to allocate",  # e.g. Intel MKL: "mkl_malloc: failed to allocate memory"
+            "cannot allocate memory",
+            "allocation failed",
+            "not enough memory",
+        )
+    ):
         return AppError(ErrorCode.INSUFFICIENT_MEMORY, _short(text))
     if any(k in lowered for k in ("cudnn", "cublas", "cuda driver", "cuda failed", "no cuda", "cuda error")):
         return AppError(ErrorCode.CUDA_UNAVAILABLE, _short(text))

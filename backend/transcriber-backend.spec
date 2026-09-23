@@ -51,7 +51,10 @@ for pkg in ("pymssql", "oracledb", "cryptography", "pymysql", "psycopg", "psycop
 
 # YouTube: yt-dlp is imported lazily; its JavaScript solver (yt-dlp-ejs) is data,
 # and the Deno runtime binary from the `deno` pip package goes into _internal/deno/.
-hiddenimports += ["app.youtube", "app.cloud", "app.archive"]
+hiddenimports += ["app.youtube", "app.cloud", "app.archive", "app.batch", "app.summarize", "app.translate", "app.subtitles", "app.course_tools"]
+hiddenimports += ["sentencepiece"]
+hiddenimports += ["app.documents", "app.course_site", "app.burn", "app.assistant"]
+binaries += collect_dynamic_libs("sentencepiece")
 try:
     hiddenimports += collect_submodules("yt_dlp")
     datas += collect_data_files("yt_dlp_ejs")

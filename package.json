@@ -60,19 +60,36 @@
       {
         "from": "backend/dist/transcriber-backend",
         "to": "backend/transcriber-backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "node_modules/ffmpeg-static/",
         "to": "ffmpeg/",
-        "filter": ["ffmpeg.exe", "ffmpeg", "LICENSE", "*.LICENSE"]
+        "filter": [
+          "ffmpeg.exe",
+          "ffmpeg",
+          "LICENSE",
+          "*.LICENSE"
+        ]
+      },
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "builtin-keys.json",
+          "auth-config.json"
+        ]
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",

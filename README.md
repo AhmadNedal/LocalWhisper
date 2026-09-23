@@ -27,10 +27,16 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Sign-in](#sign-in)
 - [How to use](#how-to-use)
 - [Choosing a model](#choosing-a-model)
 - [Paid providers (Cohere, OpenAI, Groq)](#paid-providers-cohere-openai-groq)
 - [Archive](#archive)
+- [Batch queue (whole folders)](#batch-queue-whole-folders)
+- [AI summary & chapters](#ai-summary--chapters)
+- [Ask the course & quizzes](#ask-the-course--quizzes)
+- [Translation & subtitles](#translation--subtitles)
+- [Player, exports & video with subtitles](#player-exports--video-with-subtitles)
 - [YouTube videos](#youtube-videos)
 - [Insert into a database](#insert-into-a-database)
 - [GPU (NVIDIA) support](#gpu-nvidia-support)
@@ -52,6 +58,13 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - ✍️ **Live, editable transcript** — see text appear in real time, search it, fix it, switch to a reading view.
 - ☁️ **Optional paid providers** — Cohere Transcribe, OpenAI or Groq with your own API key.
 - 🗂️ **Archive** — every transcript saved automatically, searchable, reopenable.
+- 📚 **Batch queue** — add a whole course folder and let it transcribe overnight, one file after another, straight into the archive.
+- 🌐 **Translation & subtitles** — Arabic → English for free on your PC, or with DeepL / Azure / your AI key; bilingual view, SRT/VTT subtitles and a bilingual PDF.
+- ✨ **AI summary & chapters** — overview, key points and timed chapters with your own Claude / OpenAI / Cohere / Groq key (text only is sent).
+- 💬 **Ask the course & quizzes** — ask a question about a whole course and get the answer with the lesson and minute; multiple-choice / true-false questions for each lesson.
+- 🎞️ **Player synced with the text** — click any sentence to play from there; the current sentence is highlighted. Plus a **video with the subtitles burned in**, ready for YouTube or Instagram.
+- 🌍 **Course website** — export a course as a small offline website (a page per lesson, search across the course), plus Word, text and JSON exports.
+- 📊 **Statistics** — hours transcribed, per course and per month, and what still lacks a summary or translation.
 - ▶️ **YouTube links** — uses the video's existing captions when available, otherwise downloads only the audio and transcribes it.
 - 🗄️ **Insert into your database** — SQL Server, Oracle, MySQL or PostgreSQL, with your own SQL statement.
 - 📄 **Proper Arabic PDF export** — connected letters, correct RTL order, mixed Arabic/English and numbers, optional timestamps.
@@ -107,6 +120,14 @@ That's it. The app window opens after a few seconds.
 
 ---
 
+## Sign-in
+
+The app opens on a **sign-in screen** with two tabs: **Sign in** and **Create account**. Accounts live in the central service **WindowsAppLoginBackend** (a separate ASP.NET Core project; see its README): `auth-config.json` → `apiBaseUrl` points at it (`http://localhost:5080` while developing; set the published address before building the installer). The first account created becomes the administrator. **Remember me on this computer** keeps you signed in (encrypted with Windows DPAPI) until the token expires, and the session is re-checked with the service at each launch, so a disabled account or a changed password signs the app out; without internet the remembered session keeps working. **Sign out** is in the top bar.
+
+The lock is in Electron's main process: until sign-in succeeds the window gets no connection to the local transcription engine and no saved keys, so hiding the screen doesn't unlock anything. `"enabled": false` in `auth-config.json` switches sign-in off in development only — an installed copy always asks. Only the sign-in request uses the internet; transcription stays local.
+
+---
+
 ## How to use
 
 1. **Choose a file** — drag & drop a video/audio file onto the window, or click **Choose File**.
@@ -137,6 +158,8 @@ That's it. The app window opens after a few seconds.
 - Each model is downloaded **once** and stored in the `models/` folder. After that it works offline.
 - You can pre-download a model with its **Download** button, or delete it with the 🗑️ icon.
 - If transcription is slow on your PC, try `small` with the **Fastest** priority.
+- **Custom vocabulary** (Settings → *Custom vocabulary*): list names and technical terms separated by commas (e.g. `PostgreSQL, SELECT, د. أحمد`). The model is nudged to spell them correctly — useful for course names, teachers and English terms inside Arabic lectures. It also applies to OpenAI and Groq.
+- **Speed tricks that are automatic:** the model loads while the audio is still being extracted, and in the queue the next file's audio is prepared while the current one is transcribed, so there is almost no waiting between files.
 
 ---
 
@@ -166,7 +189,115 @@ Every transcript is saved automatically in a local archive — files, YouTube li
 
 - Click **Archive** in the top bar to browse, **search** (titles and text; Arabic diacritics and letter variants are ignored), **open** or **delete** transcripts.
 - An opened transcript can be edited, exported to PDF or inserted into a database like a new one.
+- **Whole course at once:** select a course and click
+  - **Insert course into database** — every lesson is inserted with a saved database profile (each lesson in its own transaction). Extra per-lesson variables: `@lesson_index` (its number in the course, by title order), `@lesson_title`, `@course`, `@youtube_id`. **Preview** shows the rows of the first lesson first.
+  - **Export course** — one folder with `01 - Lesson.pdf`, `01 - Lesson.ar.srt`, `01 - Lesson.en.srt`… per lesson (PDF layout, content and subtitle format are yours to choose) plus an `index.csv` listing every lesson — ready to upload to your platform.
+- **Courses:** a folder or a YouTube playlist added to the queue becomes a course automatically (the folder name / playlist title). The archive's side list shows every course with its count; rename a course, or put any transcript in a course (or take it out) from its row. Searching also matches course names.
+- **Statistics:** the **Statistics** button shows hours transcribed (total, per month and per course) and, per course, how many lessons still have no summary or translation. Click a course to open it.
+- **Course website:** in **Export course**, tick **Mini website for the course** to get a `website` folder: `index.html` lists the lessons and searches the whole course (Arabic-insensitive), and each lesson page has the summary, clickable chapters, the text and the translation behind a button, plus links to the lesson's PDF/Word/subtitles. It works straight from the folder without internet, or uploaded to any hosting. The same dialog can also add **Word**, **plain text** and **JSON** files per lesson.
+- **Backup & move to another PC:** **Back up** saves the whole archive — transcripts, edits, summaries, translations and courses — to one `.ltbackup` file. On the other computer, open the archive and click **Restore**: entries are merged (new ones added, nothing deleted, and an entry edited more recently on that computer is kept). API keys and database passwords are *not* included, because they are encrypted for each computer.
 - The archive is a SQLite file in `%APPDATA%\Local Transcriber\archive.db` and never leaves your PC.
+
+---
+
+## Batch queue (whole folders)
+
+Transcribe a whole course without clicking **Start** for every lecture:
+
+1. Click **Queue** in the top bar — or, on the main screen, **Whole folder** / **Several videos**, or drop several files or a folder onto the drop area.
+2. Click **Add folder** (sub-folders are included) or **Add files** — or drop folders/files onto the window. Files are ordered naturally (`Lecture 2` before `Lecture 10`); you can reorder or remove them.
+3. Click **Start**. Files are transcribed one after another with the **current transcription settings** (model, language, local or paid provider), and every finished transcript is **saved to the archive**.
+
+<div align="center"><img src="docs/batch-en.png" alt="Batch queue" width="640" /></div>
+
+**YouTube playlists:** paste a playlist link in the queue's YouTube field (or in the main YouTube field — the app offers to add the whole playlist) and every video is added. For each video the app uses **YouTube's captions** when they exist in the transcription language (channel captions first, then automatic ones) — instant, no download — and otherwise downloads only the audio and transcribes it. Each row shows which way it went. Private/deleted videos are skipped, and videos already in the archive are skipped too, so re-adding the playlist later picks up only new lessons.
+
+Options:
+
+- **Skip files already transcribed** — files already in the archive aren't added again, so you can re-add the same folder after new lectures appear.
+- **Summarize each lecture automatically** — runs the AI summary (below) after each transcript.
+- **Insert each lecture into the database** — with a saved profile, right after its transcript (and translation / summary, if enabled) is ready. Put a course folder in the queue at night and find it on your website in the morning.
+- **Keep the computer awake** — Windows won't go to sleep while the queue runs (the screen may still turn off).
+
+A file that fails (e.g. a damaged video) is marked **Failed** with the reason and a **Retry** button; the queue continues with the next file. It only pauses when every remaining file would fail the same way (invalid API key, no credit, model can't be downloaded). **Stop after current file** finishes the running file first; **Stop now** cancels it. The top-bar button shows progress (e.g. `3/12`) while you keep working.
+
+**If the app closes before the queue finishes** (you close it, Windows restarts, a power cut), the queue is not lost: the next time you open the app a notice says how many files are left, and **Continue where it stopped** carries on (the file that was interrupted is done again from the start). Only the file list and results are saved — never API keys or database passwords.
+
+---
+
+## AI summary & chapters
+
+At the bottom of the page (after the export options), **AI summary** creates:
+
+- a short **summary** of the whole recording,
+- the **key points** (ideas, definitions, conclusions),
+- **chapters** that follow the real topic changes, each with its start time — click a chapter to jump to it in the transcript,
+- keywords.
+
+It uses a large language model from a provider you choose, with **your own API key** (billing is between you and the provider):
+
+| Provider | Default models |
+|---|---|
+| **Anthropic (Claude)** | `claude-sonnet-5`, `claude-haiku-4-5-20251001`, `claude-opus-5-5` |
+| **OpenAI** | `gpt-5.4-mini`, `gpt-5.4`, `gpt-5-mini` |
+| **Cohere** | `command-a-plus-05-2026`, `command-a-03-2025` |
+| **Groq** | `openai/gpt-oss-120b`, `llama-3.3-70b-versatile` |
+
+<div align="center"><img src="docs/summary-en.png" alt="AI summary" width="640" /></div>
+
+Choose **Other model…** to type any model name from the provider's docs. The summary can be written in the transcript's language, Arabic or English.
+
+- **Only the transcript text** is sent — never audio or video — and only when you click **Summarize** (or enable it for a batch).
+- Long lectures are split into parts, summarized, then merged, so any length works.
+- The summary is saved with the transcript in the archive.
+- In the PDF (option **Include the summary and chapters**) it appears before the transcript, the chapter list is clickable, and each chapter becomes a heading and a PDF bookmark inside the transcript.
+- Keys are shared with the paid transcription providers and stored encrypted (Windows DPAPI).
+
+> AI summaries can contain mistakes — review them before relying on them.
+
+
+**Free built-in key:** the app can ship a Groq key so summaries, quizzes and "Ask the course" work without any setup (default model `openai/gpt-oss-120b`). Put it in `builtin-keys.json` at the project root — `{"cloud:groq": "gsk_…"}` — it is ignored by git and copied into the installer. A key the user saves in the settings always takes priority. Note that anyone who has the installer can extract that key, and all users share its Groq limits.
+---
+
+## Ask the course & quizzes
+
+Both use the same AI provider and key as the [AI summary](#ai-summary--chapters) — only text is sent.
+
+**Ask the course** — open a course in the archive and click **Ask the course**. Type a question (e.g. *“Where are table joins explained?”*); the answer comes only from that course's transcripts, with citations like `Lesson 3 · 12:40` — click one to open that lesson at that minute. For big courses, the most relevant passages are picked on your PC first, so the question stays small and cheap.
+
+**Transcript quiz** — at the bottom of the page, under the summary, **Transcript quiz → Create quiz** writes multiple-choice and/or true-false questions (5 to 20) about the important ideas of the transcript. Click an option to check it: the right answer, a one-line explanation and a link to the minute where it is explained appear. The quiz is saved with the transcript in the archive, can be copied as text, and is available to the database as `@quiz` / `@quiz_json`.
+
+---
+
+## Translation & subtitles
+
+Translation stays hidden until you want it: click **Translation** in the transcript's toolbar to open it. It translates every sentence **with its time**, so you get:
+
+- a **bilingual view** of the transcript (both lines are editable),
+- **video subtitle files** — `SRT` or `VTT`, for the original or the translation (e.g. `lecture.en.srt`, ready to upload to YouTube or a course platform). Long sentences are split into readable subtitles of at most 2 lines,
+- a **bilingual PDF** — choose **Original**, **Original + translation** or **Translation only**,
+- the translation is saved in the archive, and the **batch queue** can translate every lecture automatically.
+
+<div align="center"><img src="docs/translate-en.png" alt="Translation" width="640" /></div>
+
+Choose the method:
+
+| Method | Cost | Notes |
+|---|---|---|
+| **Free, on this PC** | Free | Offline. Arabic → English with [Opus-MT](https://huggingface.co/Helsinki-NLP/opus-mt-ar-en) (~150 MB, downloaded once). Fair quality — good for general understanding, weaker with dialect and rare terms |
+| **AI with your key** | Paid by you (usually cents per lecture) | Claude / OpenAI / Cohere / Groq — the same keys as AI summaries. Best quality: understands context and technical terms and fixes recognition mistakes |
+| **DeepL** | Free monthly allowance, then paid | Excellent quality. A free-plan key ends with `:fx`. **Test** shows this month's usage |
+| **Azure AI Translator** | Free monthly allowance (F0), then paid | Enter your resource's region (e.g. `westeurope`) unless it is a global resource |
+
+Only the transcript **text** is sent to online methods — never audio or video. The target language can be English or Arabic (e.g. to translate an English lecture into Arabic with an online method).
+
+---
+
+## Player, exports & video with subtitles
+
+- **Player:** click **Player** above the transcript (or any `[00:12]` time) to play the file inside the app. The sentence being spoken is highlighted and the text follows it (turn off **Follow text** to read freely); clicking a time, a chapter, a paragraph in the reading view or a quiz time jumps there. Speed 0.75×–2×; `Ctrl+Space` plays/pauses and `Ctrl+←/→` skips 5 seconds. Transcripts of YouTube videos use YouTube's own player (internet needed). A format Chromium can't play (e.g. some AVI/WMV files) offers to open the file in your default player instead.
+- **Other formats:** next to the PDF, **Word**, **Plain text** and **JSON** use the same options (reading or timed, original/translation/both, summary and chapters). The Word file is right-to-left for Arabic, with real headings (chapters show in Word's navigation pane). JSON has every sentence with its times, the translation and the summary — handy for your own website or scripts.
+- **Video with subtitles:** **Video with subtitles** writes a *new* MP4 with the text drawn on the picture — original, translation, or both (the translation smaller, in yellow, under the original). Choose the font size and a dark box or outline. It runs on your PC with FFmpeg; expect roughly half the video's length or more. The original video is never changed.
 
 ---
 
@@ -217,6 +348,19 @@ After transcribing, click **Insert into database** to write the transcript strai
 | Per row | Per file |
 |---|---|
 | `text`, `start_seconds`, `end_seconds`, `start_time`, `end_time`, `segment_index` | `file_name`, `file_path`, `language`, `model`, `duration_seconds`, `segment_count`, `full_text`, `transcribed_at` |
+
+**Translation, AI summary and course** (sent as `NULL` when not available):
+
+| Per row | Per file |
+|---|---|
+| `translation` — the translated text of the same time range, `text_en` — the same when the translation is English | `full_translation`, `full_text_en`, `translation_language`, `summary`, `key_points` (one per line), `chapters` (`00:05:12 Title` per line), `chapters_json`, `keywords` (comma-separated), `quiz` (the transcript quiz as text), `quiz_json`, `course` |
+
+Example — Arabic text and English subtitles in one table:
+
+```sql
+INSERT INTO LessonTranscripts (LessonId, StartSeconds, TextAr, TextEn)
+VALUES (@lesson_id, @start_seconds, @text, @text_en);
+```
 
 - Values are sent as **bound parameters**, never pasted into the SQL, so Arabic text, quotes and `%` are always safe (no SQL injection).
 - Everything runs in **one transaction**: if any row fails, nothing is inserted (including the “before” statement).
@@ -276,7 +420,7 @@ The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and
 | `'npm' is not recognized` | Install Node.js and open a **new** terminal window. |
 | “FFmpeg was not found” | Run `npm install` again. |
 | Model download failed | Internet is needed the first time only. Check your connection or proxy and retry — partial downloads resume. |
-| “Not enough memory” / slow on a laptop | The app runs in memory-saving mode automatically when RAM is low. For more speed, close your browser and other apps, and use `npm run app` instead of `npm run dev` — the development server alone uses several hundred MB. |
+| “Not enough memory” / slow on a laptop | The app runs in memory-saving mode automatically when RAM is low. For more speed: choose **Fastest**, close your browser and other apps, and use `npm run app` instead of `npm run dev` — the development server alone uses several hundred MB. The fastest option of all is **Groq** (paid provider with a free plan): an hour of audio usually takes a few minutes, mostly the upload. |
 | GPU not used | Update the NVIDIA driver, run `npm run setup:gpu`, then `npm run doctor`. |
 | “No speech was detected” | The file has no audible speech (music/silence) or no audio track. |
 | PDF can't be saved | Close the PDF if it's open in another program and export again. |
@@ -323,6 +467,9 @@ For how it works internally (architecture, security model, performance), see **[
 - Transcripts and PDFs stay on your computer.
 - No analytics, no telemetry, no accounts, no API keys.
 - With a **paid provider** selected, the speech audio is uploaded to that provider (you choose this explicitly; the header shows it).
+- **Online translation** (AI key, DeepL, Azure) sends the transcript text (never audio) only when you translate; the free offline translation sends nothing.
+- **AI summaries, quizzes and “Ask the course”** send transcript text (never audio) to the provider you chose, only when you ask for one.
+- The **player** plays local files through the app's own local backend; only for a **YouTube** transcript does it load YouTube's player.
 - Otherwise, internet is used only for the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran), and — when **you** paste a YouTube link — to fetch that video's captions or audio from YouTube.
 - The internal backend listens on `127.0.0.1` only and is protected by a random per-launch token.
 

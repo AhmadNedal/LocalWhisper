@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AuthGate } from "@/components/AuthGate";
 import { TranscriberApp } from "@/components/TranscriberApp";
 
 /**
@@ -11,5 +12,6 @@ import { TranscriberApp } from "@/components/TranscriberApp";
 export default function Page() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  return mounted ? <TranscriberApp /> : null;
+  // Sign-in first (mandatory when the desktop shell requires it), then the app.
+  return mounted ? <AuthGate>{(account) => <TranscriberApp account={account} />}</AuthGate> : null;
 }
