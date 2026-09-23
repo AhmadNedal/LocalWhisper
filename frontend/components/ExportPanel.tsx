@@ -37,15 +37,51 @@ export function ExportPanel({
 }: Props) {
   return (
     <section className="card export">
+      <div className="export-mode" role="radiogroup" aria-label={t.exportMode}>
+        {(
+          [
+            { ts: false, title: t.exportModeReading, hint: t.exportModeReadingHint },
+            { ts: true, title: t.exportModeTimed, hint: t.exportModeTimedHint },
+          ] as const
+        ).map((m) => (
+          <button
+            key={String(m.ts)}
+            type="button"
+            role="radio"
+            aria-checked={options.includeTimestamps === m.ts}
+            className={`mode-option${options.includeTimestamps === m.ts ? " is-active" : ""}`}
+            onClick={() => onOptions({ includeTimestamps: m.ts })}
+          >
+            <span className={`mode-preview${m.ts ? " timed" : ""}`} aria-hidden="true">
+              {m.ts ? (
+                [70, 88, 60, 80].map((w, i) => (
+                  <span key={i} className="row">
+                    <i className="badge" />
+                    <i className="line" style={{ width: `${w}%` }} />
+                  </span>
+                ))
+              ) : (
+                <>
+                  {[100, 100, 100, 55].map((w, i) => (
+                    <i key={i} className="line" style={{ width: `${w}%` }} />
+                  ))}
+                  <i className="gap" />
+                  {[100, 100, 70].map((w, i) => (
+                    <i key={`b${i}`} className="line" style={{ width: `${w}%` }} />
+                  ))}
+                </>
+              )}
+            </span>
+            <span className="mode-text">
+              <span className="mode-title">{m.title}</span>
+              <span className="mode-hint">{m.hint}</span>
+            </span>
+            <span className="mode-radio" aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+
       <div className="export-options">
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={options.includeTimestamps}
-            onChange={(e) => onOptions({ includeTimestamps: e.target.checked })}
-          />
-          <span>{t.includeTimestamps}</span>
-        </label>
         <label className="check">
           <input
             type="checkbox"

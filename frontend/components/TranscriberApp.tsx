@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS: TranscribeSettings = {
   cloudModel: "cohere-transcribe-arabic-07-2026",
 };
 
+const pdfEngine = (e: string): "local" | "cloud" | "youtube" =>
+  e === "cloud" || e === "youtube" ? e : "local";
+
 /** What the archive needs to know about the transcript currently shown. */
 type ArchiveMeta = {
   sourceType: "file" | "youtube";
@@ -464,6 +467,8 @@ export function TranscriberApp() {
         include_timestamps: exportOptions.includeTimestamps,
         ui_language: exportOptions.pdfLang,
         segments: segments.filter((s) => s.text.trim()).map(({ start, end, text }) => ({ start, end, text })),
+        source: media.path,
+        engine: pdfEngine(archiveMeta?.engine ?? settings.engine),
       });
       setPdfPath(result.path);
     } catch (err) {

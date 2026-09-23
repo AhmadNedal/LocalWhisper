@@ -222,6 +222,9 @@ export interface ExportPdfParams {
   include_timestamps: boolean;
   ui_language: "ar" | "en";
   segments: { start: number; end: number; text: string }[];
+  /** Shown as a link in the PDF only when it is a web URL (e.g. YouTube). */
+  source?: string;
+  engine?: "local" | "cloud" | "youtube";
 }
 
 export interface DbConnectionParams {

@@ -103,6 +103,8 @@ class PdfBody(BaseModel):
     include_timestamps: bool = True
     ui_language: Literal["ar", "en"] = "ar"
     segments: list[SegmentBody] = Field(default_factory=list)
+    source: str = Field(default="", max_length=2000)
+    engine: Literal["local", "cloud", "youtube"] = "local"
 
 
 class DbConnectionBody(BaseModel):
@@ -365,6 +367,8 @@ def create_app(settings: Settings) -> FastAPI:
                 ui_language=body.ui_language,
                 segments=[ExportSegment(s.start, s.end, s.text) for s in body.segments],
                 transcribed_at=datetime.now(),
+                source=body.source,
+                engine=body.engine,
             ),
             settings.fonts_dir,
         )
