@@ -66,6 +66,11 @@ export function SettingsPanel({
     ? `${devices.gpu_name}${devices.gpu_vram_mb ? ` · ${(devices.gpu_vram_mb / 1024).toFixed(1)} GB` : ""}`
     : "";
   const recommended = gpuTarget ? system?.defaultModelGpu : system?.defaultModelCpu;
+  const selectedModel = models.find((m) => m.id === settings.model);
+  // Models limited to some languages (Cohere: Arabic / English) have no auto-detect.
+  const limitedLanguages = !isCloud && selectedModel?.languages?.length ? selectedModel.languages : null;
+  const pick = (m: ModelInfo): Partial<typeof settings> =>
+    m.languages?.length && !m.languages.includes(settings.language) ? { model: m.id, language: m.languages[0] } : { model: m.id };
   const presetHint =
     settings.preset === "fast" ? t.modeHintFast : settings.preset === "accurate" ? t.modeHintAccurate : t.modeHintBalanced;
 
@@ -135,15 +140,17 @@ export function SettingsPanel({
                 aria-checked={selected}
                 tabIndex={0}
                 className={`model-row ${selected ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`}
-                onClick={() => !disabled && onChange({ model: m.id })}
-                onKeyDown={(e) => e.key === "Enter" && !disabled && onChange({ model: m.id })}
+                onClick={() => !disabled && onChange(pick(m))}
+                onKeyDown={(e) => e.key === "Enter" && !disabled && onChange(pick(m))}
               >
                 <span className="radio" />
                 <div className="model-main">
                   <div className="model-name" dir="ltr">
-                    {m.id}
+                    {m.engine === "cohere" ? "Cohere Transcribe Arabic" : m.id}
                     {m.id === recommended ? <span className="pill pill-accent">{t.recommended}</span> : null}
+                    {m.experimental ? <span className="pill pill-warn">{t.modelExperimental}</span> : null}
                   </div>
+                  {m.engine === "cohere" ? <div className="model-note">{t.modelCohereNote}</div> : null}
                   <div className="model-meta">
                     <span>
                       {t.speed} <Dots value={m.speed} label={t.speed} />
@@ -208,8 +215,10 @@ export function SettingsPanel({
           disabled={disabled}
           onChange={(e) => onChange({ language: e.target.value })}
         >
-          <option value="auto">{t.autoDetect}</option>
-          {languageOptions(lang).map((l) => (
+          {limitedLanguages ? null : <option value="auto">{t.autoDetect}</option>}
+          {languageOptions(lang)
+            .filter((l) => !limitedLanguages || limitedLanguages.includes(l.code))
+            .map((l) => (
             <option key={l.code} value={l.code}>
               {l.name}
             </option>
@@ -242,6 +251,7 @@ export function SettingsPanel({
             </button>
           ))}
         </div>
+        {selectedModel?.gpu === false ? <p className="hint">{t.modelCpuOnly}</p> : null}
         <p className={`hint device-hint ${gpuGood ? "ok" : cuda ? "warn" : ""}`}>
           <ChipIcon size={14} />
           {gpuGood ? (

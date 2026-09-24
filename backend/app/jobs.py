@@ -151,6 +151,9 @@ class JobManager:
         self.settings = settings
         self.store = store
         self.engine = engine
+        from .cohere_engine import CohereEngine
+
+        self.cohere = CohereEngine()  # Cohere Transcribe Arabic (sherpa-onnx), loaded only when chosen
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
@@ -169,7 +172,12 @@ class JobManager:
 
                 validate_request(request.cloud_provider or "", request.cloud_model or "", request.language, request.api_key)
             else:
-                self.store.spec(request.model)  # validate early
+                spec = self.store.spec(request.model)  # validate early
+                if spec.languages and request.language and request.language not in spec.languages:
+                    raise AppError(
+                        ErrorCode.INVALID_REQUEST,
+                        f"model_language: {spec.id} supports {', '.join(spec.languages)} only",
+                    )
             # Keep memory bounded: forget finished jobs (the UI holds the result).
             self._jobs = {k: v for k, v in self._jobs.items() if v.status == "running"}
             job = Job(id=uuid.uuid4().hex, request=request)
@@ -211,8 +219,12 @@ class JobManager:
 
     def _resolve_device(self, job: Job) -> tuple[str, str]:
         req = job.request
-        device, compute_type = resolve_device(req.device)
         spec = self.store.spec(req.model)
+        if not spec.gpu:
+            if req.device == "cuda":
+                self._warn(job, "cpu_only_model")
+            return "cpu", "int8"
+        device, compute_type = resolve_device(req.device)
         if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
             if req.device == "auto":
                 device, compute_type = "cpu", "int8"
@@ -224,6 +236,15 @@ class JobManager:
                     f"({compute_type}); choose a smaller model or the CPU",
                 )
         return device, compute_type
+
+    def _load(self, spec, device: str, compute_type: str, language: str | None):  # noqa: ANN001, ANN202
+        """Load the chosen model, freeing the other engine's model first (RAM)."""
+        path = self.store.path_for(spec.id)
+        if spec.engine == "cohere":
+            self.engine.unload()
+            return self.cohere.load(path, language or "ar")
+        self.cohere.unload()
+        return self.engine.load(spec, path, device, compute_type)
 
     def _warm_up(self, job: Job, device: str, compute_type: str) -> threading.Thread | None:
         """Load the model in the background while the audio is being prepared.
@@ -240,7 +261,7 @@ class JobManager:
 
         def load() -> None:
             try:
-                self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
+                self._load(spec, device, compute_type, req.language)
             except BaseException:  # noqa: BLE001
                 log.info("Model warm-up failed; it will be retried", exc_info=True)
 
@@ -330,7 +351,7 @@ class JobManager:
                             raise Cancelled()
                         warm.join(0.2)
                 try:
-                    model = self.engine.load(spec, self.store.path_for(req.model), device, compute_type)
+                    model = self._load(spec, device, compute_type, req.language)
                 except AppError as err:
                     if device == "cuda" and req.device == "auto" and err.code in (
                         ErrorCode.CUDA_UNAVAILABLE,
@@ -404,6 +425,12 @@ class JobManager:
                 job.eta_seconds = eta
 
         spec = self.store.spec(req.model)
+        if spec.engine == "cohere":
+            language = req.language or "ar"  # Arabic model: no language detection
+            on_language(language, 1.0)
+            return self.cohere.transcribe(
+                model, audio, language=language, cancel=job.cancel_event, on_segment=on_segment
+            )
         low_memory = device == "cpu" and psutil.virtual_memory().available < spec.ram_cpu_mb * 1024 * 1024 * 1.5
         if low_memory:
             self._warn(job, "low_memory")

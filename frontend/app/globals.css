@@ -4026,3 +4026,21 @@ button.seg-seek:focus-visible {
     color: #f0b44c;
   }
 }
+
+/* Cohere (Arabic) model row */
+.model-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  margin: 2px 0 4px;
+}
+.pill.pill-warn {
+  background: #fdf0d5;
+  color: #8a5a00;
+}
+@media (prefers-color-scheme: dark) {
+  .pill.pill-warn {
+    background: color-mix(in srgb, #b26b00 25%, transparent);
+    color: #f0b44c;
+  }
+}

@@ -510,6 +510,8 @@ def create_app(settings: Settings) -> FastAPI:
     def delete_model(model_id: str) -> dict[str, bool]:
         if engine.loaded_key() and engine.loaded_key()[0] == model_id:  # type: ignore[index]
             engine.unload()
+        if model_id in CATALOG and CATALOG[model_id].engine == "cohere":
+            jobs.cohere.unload()
         store.delete(model_id)
         return {"ok": True}
 

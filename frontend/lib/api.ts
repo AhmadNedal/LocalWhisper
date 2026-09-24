@@ -78,6 +78,13 @@ export interface ModelInfo {
   vram_gpu_mb: number;
   speed: number;
   arabic_accuracy: number;
+  /** "whisper" (faster-whisper) or "cohere" (Cohere Transcribe Arabic via sherpa-onnx). */
+  engine?: string;
+  /** Supported languages; empty = every Whisper language. */
+  languages?: string[];
+  /** false: runs on the CPU only. */
+  gpu?: boolean;
+  experimental?: boolean;
   downloaded: boolean;
   download: DownloadState | null;
 }

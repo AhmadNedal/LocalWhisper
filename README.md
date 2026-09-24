@@ -154,6 +154,9 @@ The lock is in Electron's main process: until sign-in succeeds the window gets n
 | `medium` | 1.5 GB | ★★☆☆☆ | ★★★★☆ | — |
 | **`large-v3-turbo`** | 1.6 GB | ★★★★☆ | ★★★★☆ | **Default on CPU** — near-best accuracy, much faster |
 | **`large-v3`** | 3.1 GB | ★☆☆☆☆ | ★★★★★ | **Default on a GPU with 6 GB+** — best Arabic & dialects |
+| `Cohere Transcribe Arabic` *(experimental)* | 1.5 GB | ★★★★☆ | ★★★★★ | Arabic lectures and dialects, on the CPU |
+
+**Cohere Transcribe Arabic (experimental):** Cohere's open-weights (Apache 2.0) Arabic model — Modern Standard Arabic, Egyptian, Gulf, Levantine and Maghrebi dialects, and Arabic-English code-switching. On the Hugging Face Arabic ASR leaderboard its word error rate is about 26% vs 37% for Whisper large-v3. It runs locally on the CPU (4-bit ONNX, about 2.4 GB of RAM) with ONNX Runtime in a separate worker process; on a 2-core CPU it measured about 6× faster than `large-v3-turbo` with the same transcript. The published graph files have errors that stop them from loading, so the app ships repaired copies (`backend/assets/cohere`, made with `scripts/tools/repair_cohere_onnx.py`) and puts them next to the downloaded weights automatically. Limits: Arabic and English only (no language auto-detection), no GPU, no timestamps from the model itself — each segment's timing comes from the speech pauses (segments up to 20 s) — and no custom vocabulary.
 
 - Each model is downloaded **once** and stored in the `models/` folder. After that it works offline.
 - You can pre-download a model with its **Download** button, or delete it with the 🗑️ icon.

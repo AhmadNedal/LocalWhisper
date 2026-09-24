@@ -25,6 +25,10 @@ def _watch_parent(pid: int) -> None:
 
 
 def main() -> None:
+    if "--cohere-worker" in sys.argv:  # the installed exe doubles as the Cohere model worker
+        from .cohere_worker import run
+
+        sys.exit(run())
     # Make console output UTF-8 so Arabic log lines never crash on cp1252.
     for stream in (sys.stdout, sys.stderr):
         try:

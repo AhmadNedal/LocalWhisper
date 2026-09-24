@@ -1,7 +1,7 @@
 // `npm run dev`: starts the Next.js dev server, waits for it, then launches
 // Electron pointing at it. Electron itself starts the Python backend.
 // Closing the app window stops everything.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import http from "node:http";
 import path from "node:path";
@@ -20,8 +20,13 @@ if (major < 22 || (major === 22 && minor < 12)) {
 const PORT = Number(process.env.UI_PORT || 3123);
 const URL = `http://localhost:${PORT}`;
 
-if (!venvExists()) {
-  console.warn("[dev] backend/.venv not found — run `npm run setup`. The UI will show setup instructions.");
+// Prepare / update the Python engine first: installs anything new in
+// backend/requirements.txt, and returns at once when nothing changed.
+{
+  const setup = spawnSync(process.execPath, [path.join(ROOT, "scripts", "setup-python.mjs")], { cwd: ROOT, stdio: "inherit" });
+  if (setup.status !== 0 && !venvExists()) {
+    console.warn("[dev] The Python environment could not be prepared (see above). The UI will show setup instructions.");
+  }
 }
 
 const nextBin = path.join(path.dirname(require.resolve("next/package.json")), "dist", "bin", "next");

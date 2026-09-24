@@ -17,6 +17,8 @@ datas += collect_data_files("fpdf")
 binaries = []
 binaries += collect_dynamic_libs("ctranslate2")  # ctranslate2.dll, libiomp5md.dll, …
 binaries += collect_dynamic_libs("onnxruntime")
+# kaldi-native-fbank (features for Cohere Transcribe Arabic): native extension.
+binaries += collect_dynamic_libs("kaldi_native_fbank")
 
 # Optional NVIDIA runtime (present only if requirements-gpu.txt was installed).
 # Bundling them makes GPU transcription work on user machines with only the
@@ -41,7 +43,7 @@ hiddenimports += collect_submodules("uvicorn")
 # Every module of the app (many are imported lazily inside functions, which
 # PyInstaller can't see) — new modules are picked up without editing this file.
 hiddenimports += collect_submodules("app")
-hiddenimports += ["uharfbuzz"]
+hiddenimports += ["uharfbuzz", "kaldi_native_fbank", "onnxruntime"]
 # Database drivers are imported lazily, so PyInstaller can't see them on its own.
 # (pyodbc is a single extension module; it links to odbc32.dll, which ships with Windows.)
 hiddenimports += ["pyodbc"]

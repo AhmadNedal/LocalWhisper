@@ -61,6 +61,7 @@ export function ProgressPanel({
       : (readyNote ?? t.idle);
   const gpuFallback = job?.warnings.some((w) => w.startsWith("gpu_fallback"));
   const gpuTooSmall = job?.warnings.includes("gpu_too_small");
+  const cpuOnly = job?.warnings.includes("cpu_only_model");
   const lowMemory = job?.warnings.includes("low_memory");
 
   return (
@@ -175,6 +176,11 @@ export function ProgressPanel({
           {gpuTooSmall ? (
             <div className="notice warn">
               <AlertIcon size={16} /> {t.gpuTooSmall}
+            </div>
+          ) : null}
+          {cpuOnly ? (
+            <div className="notice warn">
+              <AlertIcon size={16} /> {t.cpuOnlyModel}
             </div>
           ) : null}
           {gpuFallback ? (

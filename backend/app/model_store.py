@@ -1,7 +1,8 @@
-"""Local Whisper model cache.
+"""Local model cache.
 
 Models are CTranslate2 conversions of OpenAI Whisper published on the Hugging
-Face Hub (no account or API key needed). Each model is downloaded exactly once
+Face Hub (no account or API key needed), plus the ONNX export of Cohere
+Transcribe Arabic (run with sherpa-onnx, see cohere_engine.py). Each model is downloaded exactly once
 into ``<models_dir>/<model-id>/`` and afterwards loaded straight from disk, so
 transcription works fully offline.
 
@@ -37,6 +38,20 @@ class ModelSpec:
     vram_gpu_mb: int  # approximate VRAM when running float16 on GPU (batched)
     speed: int  # 1 (slowest) … 5 (fastest)
     arabic_accuracy: int  # 1 (weak) … 5 (best)
+    engine: str = "whisper"  # whisper (faster-whisper) | cohere (sherpa-onnx)
+    files: tuple[str, ...] = ()  # files to download (default: the Whisper set)
+    languages: tuple[str, ...] = ()  # supported languages; empty = all Whisper languages
+    gpu: bool = True  # False: always runs on the CPU
+    experimental: bool = False
+
+    @property
+    def patterns(self) -> list[str]:
+        return list(self.files) if self.files else _MODEL_FILES
+
+    @property
+    def required(self) -> str:
+        """The file whose presence proves the download finished."""
+        return self.files[1] if self.files else "model.bin"
 
 
 CATALOG: dict[str, ModelSpec] = {
@@ -48,6 +63,28 @@ CATALOG: dict[str, ModelSpec] = {
         ModelSpec("medium", "Systran/faster-whisper-medium", 1530, 1700, 3500, 2, 4),
         ModelSpec("large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo", 1620, 2000, 3500, 4, 4),
         ModelSpec("large-v3", "Systran/faster-whisper-large-v3", 3090, 3300, 5500, 1, 5),
+        # Cohere Transcribe Arabic (07-2026), 4-bit ONNX export: Arabic-specialized
+        # (MSA + dialects), Arabic/English only, CPU only, segment times from the VAD.
+        ModelSpec(
+            "cohere-arabic",
+            "abdelmoez98/cohere-transcribe-arabic-07-2026-ONNX",
+            1540,
+            2400,
+            0,
+            4,
+            5,
+            engine="cohere",
+            files=(
+                "onnx/encoder.q4f16.onnx",
+                "onnx/encoder.q4f16.onnx_data",
+                "onnx/decoder.q4f16.onnx",
+                "onnx/decoder.q4f16.onnx_data",
+                "onnx/tokens.txt",
+            ),
+            languages=("ar", "en"),
+            gpu=False,
+            experimental=True,
+        ),
     )
 }
 
@@ -102,7 +139,9 @@ class ModelStore:
 
     def is_downloaded(self, model_id: str) -> bool:
         path = self.path_for(model_id)
-        return (path / _MARKER).is_file() and (path / "model.bin").is_file()
+        spec = CATALOG.get(model_id)
+        required = spec.required if spec else "model.bin"
+        return (path / _MARKER).is_file() and (path / required).is_file()
 
     def list_models(self) -> list[dict[str, object]]:
         items = []
@@ -111,6 +150,7 @@ class ModelStore:
             items.append(
                 {
                     **asdict(spec),
+                    "files": None,
                     "downloaded": self.is_downloaded(spec.id),
                     "download": state.to_dict() if state else None,
                 }
@@ -139,7 +179,7 @@ class ModelStore:
             self._downloads[model_id] = state
             thread = threading.Thread(
                 target=self._download,
-                args=(spec.repo, self.path_for(spec.id), _MODEL_FILES, state),
+                args=(spec.repo, self.path_for(spec.id), spec.patterns, state, spec.required),
                 daemon=True,
                 name=f"dl-{model_id}",
             )
@@ -211,7 +251,9 @@ class ModelStore:
             shutil.rmtree(self.extra_path(key), ignore_errors=True)
             self._downloads.pop(f"extra:{key}", None)
 
-    def _download(self, repo: str, target: Path, patterns: list[str], state: DownloadState) -> None:
+    def _download(
+        self, repo: str, target: Path, patterns: list[str], state: DownloadState, required: str = "model.bin"
+    ) -> None:
         from faster_whisper.utils import disabled_tqdm
         from huggingface_hub import HfApi, snapshot_download
 
@@ -247,8 +289,8 @@ class ModelStore:
                 allow_patterns=patterns,
                 tqdm_class=disabled_tqdm,  # progress comes from the poller above
             )
-            if not (target / "model.bin").is_file():
-                raise RuntimeError("model.bin missing after download")
+            if not (target / required).is_file():
+                raise RuntimeError(f"{required} missing after download")
             (target / _MARKER).write_text(
                 json.dumps({"repo": repo, "downloaded_at": time.time()}), encoding="utf-8"
             )

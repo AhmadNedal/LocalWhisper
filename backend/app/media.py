@@ -173,6 +173,7 @@ class PcmAudio:
     """Memory-mapped 16 kHz mono PCM produced by :func:`extract_audio`."""
 
     def __init__(self, path: Path) -> None:
+        self.path = path
         size = path.stat().st_size
         if size < 2:
             self._data = np.zeros(0, dtype=np.int16)
