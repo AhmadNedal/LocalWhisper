@@ -81,7 +81,6 @@ class ArchiveBody(BaseModel):
     segments: list[dict[str, object]] = Field(default_factory=list)
     summary: dict[str, object] | None = None
     translation: dict[str, object] | None = None
-    quiz: dict[str, object] | None = None
     course: str | None = Field(default=None, max_length=200)
 
 
@@ -142,23 +141,6 @@ class AskBody(BaseModel):
     provider: str
     model: str = Field(max_length=200)
     api_key: str = Field(max_length=500, repr=False)
-
-
-class QuizBody(BaseModel):
-    provider: str
-    model: str = Field(max_length=200)
-    api_key: str = Field(max_length=500, repr=False)
-    count: int = Field(default=8, ge=3, le=30)
-    types: list[Literal["mcq", "tf"]] = Field(default_factory=lambda: ["mcq", "tf"])
-    language: Literal["auto", "ar", "en"] = "auto"
-    title: str = Field(default="", max_length=500)
-    duration: float | None = None
-    archive_id: str | None = None
-    segments: list[SegmentBody] = Field(default_factory=list)
-
-
-class ArchiveQuizBody(BaseModel):
-    quiz: dict[str, object] | None = None
 
 
 class BurnBody(BaseModel):
@@ -342,7 +324,6 @@ class DbInsertBody(DbConnectionBody):
     translation: list[SegmentBody] | None = None
     translation_language: str = ""
     summary: dict[str, object] | None = None
-    quiz: dict[str, object] | None = None
     course: str = ""
 
     def to_request(self) -> tuple[db_export.DbRequest, db_export.TranscriptPayload]:
@@ -366,7 +347,6 @@ class DbInsertBody(DbConnectionBody):
                 translation=[ExportSegment(t.start, t.end, t.text) for t in self.translation] if self.translation else None,
                 translation_language=self.translation_language,
                 summary=self.summary,
-                quiz=self.quiz,
                 course=self.course,
             ),
         )
@@ -424,7 +404,7 @@ def create_app(settings: Settings) -> FastAPI:
     from .burn import BurnManager, BurnRequest
 
     burner = BurnManager(settings.ffmpeg_path, settings.fonts_dir)
-    from .assistant import AskRequest, AssistantManager, QuizRequest
+    from .assistant import AskRequest, AssistantManager
 
     assistant = AssistantManager(archive)
 
@@ -591,29 +571,12 @@ def create_app(settings: Settings) -> FastAPI:
         archive.set_course(item_id, body.course)
         return {"ok": True}
 
-    # ---- Ask the course / quizzes (user's own AI key) ----------------------------------
+    # ---- Ask the course (user's own AI key) ----------------------------------
     @app.post("/assist/ask")
     def assist_ask(body: AskBody) -> dict[str, object]:
         return assistant.start_ask(
             AskRequest(course=body.course, question=body.question, provider=body.provider, model=body.model, api_key=body.api_key)
         ).snapshot()
-
-    @app.post("/assist/quiz")
-    def assist_quiz(body: QuizBody) -> dict[str, object]:
-        if not body.segments:
-            raise AppError(ErrorCode.INVALID_REQUEST, "Transcript is empty")
-        req = QuizRequest(
-            segments=[s.model_dump() for s in body.segments],
-            provider=body.provider,
-            model=body.model,
-            api_key=body.api_key,
-            count=body.count,
-            types=tuple(body.types or ["mcq", "tf"]),
-            language=body.language,
-            title=body.title,
-            duration=body.duration,
-        )
-        return assistant.start_quiz(req, body.archive_id).snapshot()
 
     @app.get("/assist/{task_id}")
     def assist_status(task_id: str) -> dict[str, object]:
@@ -622,11 +585,6 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/assist/{task_id}/cancel")
     def assist_cancel(task_id: str) -> dict[str, bool]:
         assistant.cancel(task_id)
-        return {"ok": True}
-
-    @app.put("/archive/{item_id}/quiz")
-    def archive_set_quiz(item_id: str, body: ArchiveQuizBody) -> dict[str, bool]:
-        archive.set_quiz(item_id, body.quiz)
         return {"ok": True}
 
     @app.post("/export/burn")

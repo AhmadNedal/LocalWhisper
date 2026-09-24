@@ -130,9 +130,9 @@ Cancellation is cooperative (checked between segments) and kills FFmpeg immediat
 
 `burn.py` writes an ASS file (PlayRes = the video's size, font size relative to its height, `Encoding -1` so libass picks each line's base direction) and runs FFmpeg's `subtitles` filter with **relative** paths from a temp working directory (`subtitles=subs.ass:fontsdir=fonts`) to avoid Windows drive-letter escaping. Font: bundled Noto Sans Arabic. With the translation, two independent tracks (original above, translation smaller below). Video is re-encoded with libx264 CRF 20 `veryfast`; audio is copied when AAC/MP3, else AAC 192k; written to `*.part.mp4` then renamed; progress from `-progress pipe:1`.
 
-## Ask the course & quizzes
+## Ask the course
 
-`assistant.py`. **Ask:** every lesson of the course is cut into ~45 s blocks (plus each lesson's summary), tokenized with Arabic normalization, prefix stripping (`ال`, `وال`, `بال`…) and a small stop-word list. If the whole course fits the provider's input budget it is sent as is; otherwise BM25 picks the best blocks (with a neighbour on each side) up to the budget. Excerpts are labelled `[L<lesson> mm:ss]`, the model must cite with those labels, and citations (inline or listed) are validated against real lessons and snapped to real block starts. **Quiz:** the lesson is split like the summary (map over parts for long lessons), the model returns `mcq`/`tf` questions with the answer index, an explanation and a timestamp; questions are validated (option count, unique options, valid answer, no duplicates), true/false options are replaced by localized labels, and times snap to real sentence starts. Stored in `quiz_json`; database variables `@quiz` (text) and `@quiz_json`.
+`assistant.py`. **Ask:** every lesson of the course is cut into ~45 s blocks (plus each lesson's summary), tokenized with Arabic normalization, prefix stripping (`ال`, `وال`, `بال`…) and a small stop-word list. If the whole course fits the provider's input budget it is sent as is; otherwise BM25 picks the best blocks (with a neighbour on each side) up to the budget. Excerpts are labelled `[L<lesson> mm:ss]`, the model must cite with those labels, and citations (inline or listed) are validated against real lessons and snapped to real block starts.
 
 ## AI summaries
 
@@ -216,8 +216,7 @@ All endpoints require the `X-Auth-Token` header.
 | POST · GET | `/export/burn` · `/export/burn/{id}` (+ `/cancel`) | Video with subtitles (background task) |
 | GET | `/media/stream?path=&token=` | Local media for the built-in player (Range) |
 | GET | `/archive/stats` | Totals, per course, per month |
-| PUT | `/archive/{id}/quiz` | Store or clear a transcript quiz |
-| POST · GET | `/assist/ask` · `/assist/quiz` · `/assist/{id}` (+ `/cancel`) | Ask the course / create a quiz (background tasks) |
+| POST · GET | `/assist/ask` · `/assist/{id}` (+ `/cancel`) | Ask the course (background task) |
 | POST | `/batch/dismiss_restored` | Hide the "continue the queue" notice |
 | POST | `/db/test` | Test a database connection string |
 | POST | `/db/preview` | Convert the user's SQL and show the first parameter rows |
@@ -236,7 +235,7 @@ frontend/
   app/             layout, page, globals.css (Fluent-style, RTL-first)
   components/      MediaPicker, SettingsPanel, ProgressPanel, TranscriptView, SummaryPanel,
                    ExportPanel, BatchDialog, ArchiveDialog, DatabaseDialog, YoutubePanel,
-                   MediaPlayer, BurnDialog, QuizPanel, AskDialog, StatsDialog, CourseToolsDialog
+                   MediaPlayer, BurnDialog, AskDialog, StatsDialog, CourseToolsDialog
   lib/             API client, i18n (ar/en), languages, formatting, hooks
   public/fonts/    Noto Sans / Naskh Arabic (bundled, offline)
 backend/
@@ -251,7 +250,7 @@ backend/
   app/documents.py    Word / TXT / JSON exports
   app/course_site.py  static course website
   app/burn.py         video with burned-in subtitles (FFmpeg + libass)
-  app/assistant.py    ask the course (retrieval + LLM) and lesson quizzes
+  app/assistant.py    ask the course (retrieval + LLM)
   app/errors.py    user-facing error codes
   app/config.py    paths from environment (no hard-coded machine paths)
   transcriber-backend.spec  PyInstaller build

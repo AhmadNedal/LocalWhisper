@@ -172,7 +172,7 @@ export function AskDialog({ t, lang, client, course, onOpenAt, onClose }: Props)
                 </div>
               ) : e.error ? (
                 <div className="notice error">
-                  <AlertIcon size={16} /> {e.error.code === "cloud_auth" ? t.quizNeedsKey : errorMessage(lang, e.error.code)}
+                  <AlertIcon size={16} /> {e.error.code === "cloud_auth" ? t.askNeedsKey : errorMessage(lang, e.error.code)}
                 </div>
               ) : e.result ? (
                 <div className={`ask-a${e.result.found ? "" : " not-found"}`}>

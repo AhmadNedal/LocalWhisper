@@ -4,8 +4,6 @@
   transcripts, with the lesson and minute of every source. Only the most relevant
   excerpts are sent when the course is larger than the model's budget (simple
   keyword retrieval, Arabic-normalized, runs locally).
-* **Quiz** — multiple-choice and true/false questions for one lesson, each with
-  the right answer, a short explanation and the minute where it is explained.
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ import logging
 import math
 import re
 import threading
-import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -23,14 +20,12 @@ from typing import Any, Callable
 from .archive import Archive, _normalize
 from .errors import AppError, ErrorCode
 from .summarize import (
-    _LANG_NAMES,
     build_blocks,
     chat,
     format_clock,
     parse_clock,
     parse_json,
     provider,
-    split_parts,
 )
 
 log = logging.getLogger(__name__)
@@ -222,153 +217,11 @@ def ask(archive: Archive, req: AskRequest, cancel: threading.Event) -> dict[str,
     }
 
 
-# ------------------------------------------------------------------ quiz
-@dataclass
-class QuizRequest:
-    segments: list[dict[str, Any]]
-    provider: str
-    model: str
-    api_key: str = field(repr=False)
-    count: int = 8
-    types: tuple[str, ...] = ("mcq", "tf")
-    language: str = "auto"
-    title: str = ""
-    duration: float | None = None
-
-
-def _quiz_system(language: str) -> str:
-    lang = _LANG_NAMES.get(language, "the same language as the transcript")
-    return (
-        "You write quiz questions that check a student's understanding of a recorded lesson. "
-        "Use only what the transcript says (it comes from speech recognition: ignore misheard words). "
-        "Test understanding of the important ideas, not trivia like exact wording or who said hello. "
-        "Wrong options must be plausible. Explanations are one or two sentences. "
-        f"Write every text in {lang}; keep technical terms, code and numbers exactly as spoken. "
-        "Reply with a single JSON object and nothing else."
-    )
-
-
-def _quiz_prompt(req: QuizRequest, transcript: str, count: int, part: str = "") -> str:
-    kinds = []
-    if "mcq" in req.types:
-        kinds.append('"mcq": exactly 4 options, one correct')
-    if "tf" in req.types:
-        kinds.append('"tf": a statement that is true or false (options must be ["true", "false"])')
-    return (
-        f"Lesson: {req.title or '—'}{part}\n"
-        f"Write {count} questions. Allowed types: {'; '.join(kinds)}. Mix the types if more than one is allowed, "
-        "and spread the questions over the whole lesson in time order. For each question give the [timestamp] "
-        "where the answer is explained.\n"
-        'Return JSON: {"questions": [{"type": "mcq", "question": "...", "options": ["...", "...", "...", "..."], '
-        '"answer": 0, "explanation": "...", "start": "mm:ss"}]} — "answer" is the index of the correct option.\n\n'
-        f"Transcript (each line starts with its [timestamp]):\n<transcript>\n{transcript}\n</transcript>"
-    )
-
-
-def _clean_questions(raw: dict[str, Any], starts: list[float], duration: float, tf_labels: tuple[str, str]) -> list[dict[str, Any]]:
-    out = []
-    seen: set[str] = set()
-    for q in raw.get("questions") or []:
-        if not isinstance(q, dict):
-            continue
-        text = " ".join(str(q.get("question") or "").split())
-        kind = "tf" if str(q.get("type")).lower() in ("tf", "true_false", "truefalse", "boolean") else "mcq"
-        options = [" ".join(str(o).split()) for o in (q.get("options") or []) if str(o).strip()]
-        try:
-            answer = int(q.get("answer"))
-        except (TypeError, ValueError):
-            answer_text = str(q.get("answer") or "").strip().lower()
-            answer = next((i for i, o in enumerate(options) if o.lower() == answer_text), -1)
-            if kind == "tf" and answer < 0:
-                answer = 0 if answer_text in ("true", "صح", "صحيح", "yes") else 1 if answer_text in ("false", "خطأ", "خطا", "no") else -1
-        if kind == "tf":
-            options = list(tf_labels)
-        if not text or len(options) < 2 or not 0 <= answer < len(options) or len(set(options)) != len(options):
-            continue
-        key = _normalize(text)
-        if key in seen:
-            continue
-        seen.add(key)
-        t = parse_clock(q.get("start"))
-        if t is not None and duration and t > duration + 5:
-            t = None
-        if t is not None and starts:
-            t = min(starts, key=lambda s: abs(s - t))
-        out.append(
-            {
-                "type": kind,
-                "question": text[:500],
-                "options": [o[:300] for o in options[:6]],
-                "answer": answer,
-                "explanation": " ".join(str(q.get("explanation") or "").split())[:600],
-                "start": round(t, 2) if t is not None else None,
-            }
-        )
-    return out
-
-
-def quiz(req: QuizRequest, cancel: threading.Event, on_progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
-    prov = provider(req.provider)
-    blocks = build_blocks(req.segments)
-    if not blocks:
-        raise AppError(ErrorCode.INVALID_REQUEST, "Transcript is empty")
-    # Snap question times to real sentence starts (blocks are ~40 s long).
-    starts = sorted({float(s.get("start", 0)) for s in req.segments if str(s.get("text", "")).strip()})
-    duration = float(req.duration or 0)
-    language = req.language
-    if language == "auto":
-        sample = " ".join(b.text for b in blocks[:5])
-        language = "ar" if sum(1 for ch in sample if "؀" <= ch <= "ۿ") > len(sample) * 0.3 else "en"
-    tf_labels = ("صح", "خطأ") if language == "ar" else ("True", "False")
-    count = max(3, min(int(req.count), 30))
-    parts = split_parts(blocks, prov.max_input_chars)
-    total_chars = sum(len(b.text) for b in blocks) or 1
-    questions: list[dict[str, Any]] = []
-    system = _quiz_system(language)
-    for i, part in enumerate(parts, start=1):
-        if on_progress:
-            on_progress(i - 1, len(parts))
-        share = max(1, round(count * sum(len(b.text) for b in part) / total_chars))
-        transcript = "\n".join(f"[{format_clock(b.start)}] {b.text}" for b in part)
-        label = f" (part {i} of {len(parts)})" if len(parts) > 1 else ""
-        raw = parse_json(chat(prov, req.model, req.api_key, system, _quiz_prompt(req, transcript, share, label), cancel))
-        questions += _clean_questions(raw, starts, duration, tf_labels)
-    if on_progress:
-        on_progress(len(parts), len(parts))
-    if not questions:
-        raise AppError(ErrorCode.SUMMARY_FAILED, "The model returned no usable questions")
-    questions.sort(key=lambda q: (q["start"] is None, q["start"] or 0))
-    return {
-        "questions": questions[: count + 2],
-        "language": language,
-        "provider": prov.id,
-        "provider_name": prov.name,
-        "model": req.model,
-        "created_at": time.time(),
-    }
-
-
-def quiz_text(data: dict[str, Any] | None) -> str:
-    """Plain-text version (database variable ``@quiz_text`` and "copy")."""
-    if not data:
-        return ""
-    lines = []
-    for n, q in enumerate(data.get("questions") or [], start=1):
-        lines.append(f"{n}. {q.get('question', '')}")
-        for i, o in enumerate(q.get("options") or []):
-            mark = "✓" if i == q.get("answer") else " "
-            lines.append(f"   {mark} {chr(0x41 + i)}) {o}")
-        if q.get("explanation"):
-            lines.append(f"   → {q['explanation']}")
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
 # ------------------------------------------------------------------ tasks
 @dataclass
 class AssistTask:
     id: str
-    kind: str  # ask | quiz
+    kind: str  # ask
     status: str = "running"
     step: int = 0
     steps: int = 1
@@ -422,23 +275,6 @@ class AssistantManager:
     def start_ask(self, req: AskRequest) -> AssistTask:
         provider(req.provider)
         return self._start("ask", lambda task: ask(self.archive, req, task.cancel), req)
-
-    def start_quiz(self, req: QuizRequest, archive_id: str | None) -> AssistTask:
-        provider(req.provider)
-
-        def work(task: AssistTask) -> dict[str, Any]:
-            def progress(step: int, steps: int) -> None:
-                task.step, task.steps = step, steps
-
-            result = quiz(req, task.cancel, progress)
-            if archive_id:
-                try:
-                    self.archive.set_quiz(archive_id, result)
-                except AppError:
-                    log.warning("Could not save the quiz on %s", archive_id)
-            return result
-
-        return self._start("quiz", work, req)
 
     def get(self, task_id: str) -> AssistTask:
         task = self._tasks.get(task_id)

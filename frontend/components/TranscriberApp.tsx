@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   type AiSummary,
-  type QuizData,
   type BatchState,
   type LlmProvider,
   type TranslateCatalog,
@@ -64,7 +63,6 @@ import { TranscriptView } from "./TranscriptView";
 import { MediaPlayer, type SeekRequest } from "./MediaPlayer";
 import { BurnDialog } from "./BurnDialog";
 import type { Account } from "./AuthGate";
-import { QuizPanel } from "./QuizPanel";
 import { PlayerClock, youtubeIdFrom } from "@/lib/playerClock";
 import { YoutubePanel } from "./YoutubePanel";
 
@@ -208,16 +206,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
   const clock = useMemo(() => new PlayerClock(), []);
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [burnOpen, setBurnOpen] = useState(false);
-  const [quiz, setQuiz] = useState<QuizData | null>(null);
-  const onQuiz = useCallback(
-    (next: QuizData | null) => {
-      setQuiz(next);
-      if (!next && client && archiveIdRef.current) {
-        client.archiveSetQuiz(archiveIdRef.current, null).catch(() => undefined);
-      }
-    },
-    [client],
-  );
   const seekTo = useCallback(
     (time: number) => {
       setPlayerOpen(true);
@@ -275,7 +263,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
     setSummary(null);
     setSummaryError(null);
     setSummaryTask(null);
-    setQuiz(null);
     setTranslation(null);
     setTranslateError(null);
     setTranslateTask(null);
@@ -604,7 +591,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
             segments: snapshot,
             summary,
             translation,
-            quiz,
           });
           archiveIdRef.current = res.id;
           lastArchived.current = key;
@@ -615,7 +601,7 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
       });
     }, 800);
     return () => clearTimeout(timer);
-  }, [client, media, archiveMeta, running, segments, summary, translation, quiz]);
+  }, [client, media, archiveMeta, running, segments, summary, translation]);
 
   const openArchived = async (id: string) => {
     if (!client || running) return;
@@ -644,7 +630,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
       });
       transcriptGen.current += 1;
       setSummary(item.summary ?? null);
-      setQuiz(item.quiz ?? null);
       setSummaryError(null);
       setSummaryTask(null);
       setTranslation(item.translation ?? null);
@@ -1614,30 +1599,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
               }}
             />
           ) : null}
-          {llmProviders.length && segments.length && !running ? (
-            <QuizPanel
-              t={t}
-              lang={lang}
-              client={client}
-              settings={summarySettings}
-              providerName={
-                llmProviders.find((p) => p.id === summarySettings.provider)?.name ?? summarySettings.provider
-              }
-              quiz={quiz}
-              onQuiz={onQuiz}
-              archiveId={archiveId}
-              title={media?.name ?? ""}
-              duration={media?.duration ?? null}
-              segments={segments
-                .filter((s) => s.text.trim())
-                .map(({ start, end, text }) => ({ start, end, text }))}
-              canGenerate={Boolean(client && media && segments.length && !running)}
-              onJump={(time) => {
-                setFocus({ time, nonce: Date.now() });
-                if (playerOpen && playable) seekTo(time);
-              }}
-            />
-          ) : null}
         </div>
       </main>
 
@@ -1762,7 +1723,6 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
           translation={translation?.segments ?? null}
           translationLanguage={translation?.language ?? ""}
           summary={summary}
-          quiz={quiz}
           course={archiveCourse}
           onClose={() => setDbOpen(false)}
         />

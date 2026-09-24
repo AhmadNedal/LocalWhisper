@@ -184,24 +184,6 @@ export interface ArchiveSummary {
   has_translation?: number | boolean;
 }
 
-export interface QuizQuestion {
-  type: "mcq" | "tf";
-  question: string;
-  options: string[];
-  answer: number;
-  explanation: string;
-  start: number | null;
-}
-
-export interface QuizData {
-  questions: QuizQuestion[];
-  language: string;
-  provider: string;
-  provider_name: string;
-  model: string;
-  created_at: number;
-}
-
 export interface AskCitation {
   lesson_index: number;
   id: string;
@@ -223,11 +205,11 @@ export interface AskResult {
 
 export interface AssistTask {
   id: string;
-  kind: "ask" | "quiz";
+  kind: "ask";
   status: "running" | "completed" | "error" | "cancelled";
   step: number;
   steps: number;
-  result: QuizData | AskResult | null;
+  result: AskResult | null;
   error: { code: string; detail: string } | null;
 }
 
@@ -252,7 +234,6 @@ export interface ArchiveItem extends Omit<ArchiveSummary, "preview"> {
   segments: Segment[];
   summary: AiSummary | null;
   translation: TranslationData | null;
-  quiz?: QuizData | null;
 }
 
 // ---- Translation -----------------------------------------------------------------
@@ -514,7 +495,6 @@ export interface ArchiveSaveParams {
   segments: { start: number; end: number; text: string }[];
   summary?: AiSummary | null;
   translation?: TranslationData | null;
-  quiz?: QuizData | null;
 }
 
 export interface StartJobParams {
@@ -572,7 +552,6 @@ export interface DbInsertParams extends DbConnectionParams {
   translation?: { start: number; end: number; text: string }[] | null;
   translation_language?: string;
   summary?: AiSummary | null;
-  quiz?: QuizData | null;
   course?: string;
 }
 
@@ -689,28 +668,11 @@ export class BackendClient {
   assistAsk(params: { course: string | null; question: string; provider: string; model: string; api_key: string }) {
     return this.request<AssistTask>("POST", "/assist/ask", params);
   }
-  assistQuiz(params: {
-    provider: string;
-    model: string;
-    api_key: string;
-    count: number;
-    types: ("mcq" | "tf")[];
-    language: "auto" | "ar" | "en";
-    title: string;
-    duration: number | null;
-    archive_id: string | null;
-    segments: { start: number; end: number; text: string }[];
-  }) {
-    return this.request<AssistTask>("POST", "/assist/quiz", params);
-  }
   assistStatus(id: string) {
     return this.request<AssistTask>("GET", `/assist/${encodeURIComponent(id)}`);
   }
   assistCancel(id: string) {
     return this.request<{ ok: boolean }>("POST", `/assist/${encodeURIComponent(id)}/cancel`);
-  }
-  archiveSetQuiz(id: string, quiz: QuizData | null) {
-    return this.request<{ ok: boolean }>("PUT", `/archive/${encodeURIComponent(id)}/quiz`, { quiz });
   }
   burnStart(params: {
     source: string;

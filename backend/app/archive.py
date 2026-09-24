@@ -48,14 +48,12 @@ BACKUP_VERSION = 1
 _COPY_COLUMNS = (
     "id", "title", "source_type", "source", "created_at", "updated_at", "duration", "language", "engine", "model",
     "segment_count", "word_count", "full_text", "segments_json", "summary_json", "translation_json", "course",
-    "quiz_json",
 )
 
 _LIST_COLUMNS = (
     "id, title, source_type, source, created_at, updated_at, duration, language, engine, model, course, "
     "segment_count, word_count, substr(full_text, 1, 220) AS preview, "
-    "(summary_json IS NOT NULL) AS has_summary, (translation_json IS NOT NULL) AS has_translation, "
-    "(quiz_json IS NOT NULL) AS has_quiz"
+    "(summary_json IS NOT NULL) AS has_summary, (translation_json IS NOT NULL) AS has_translation"
 )
 
 
@@ -88,9 +86,14 @@ class Archive:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_SCHEMA)
         columns = {r[1] for r in self._db.execute("PRAGMA table_info(transcripts)")}
-        for column in ("summary_json", "translation_json", "course", "search_text", "quiz_json"):  # added in later versions: migrate in place
+        for column in ("summary_json", "translation_json", "course", "search_text"):  # added in later versions: migrate in place
             if column not in columns:
                 self._db.execute(f"ALTER TABLE transcripts ADD COLUMN {column} TEXT")
+        if "quiz_json" in columns:  # the quiz feature was removed: drop its stored questions
+            try:
+                self._db.execute("ALTER TABLE transcripts DROP COLUMN quiz_json")
+            except sqlite3.OperationalError:
+                pass  # SQLite older than 3.35: the unused column is harmless
         self._db.execute("CREATE INDEX IF NOT EXISTS ix_transcripts_course ON transcripts(course)")
         self._db.create_function("norm", 1, lambda s: _normalize(s or ""), deterministic=True)
         # Search runs over a normalized copy stored once at save time, so a large archive is
@@ -131,7 +134,6 @@ class Archive:
             "summary_json": json.dumps(item["summary"], ensure_ascii=False) if item.get("summary") else None,
             "translation_json": json.dumps(item["translation"], ensure_ascii=False) if item.get("translation") else None,
             "course": _clean_course(item.get("course")),
-            "quiz_json": json.dumps(item["quiz"], ensure_ascii=False) if item.get("quiz") else None,
             "now": now,
         }
         values["search_text"] = _search_text(values["title"], values["source"], full_text)
@@ -140,10 +142,10 @@ class Archive:
                 """
                 INSERT INTO transcripts (id, title, source_type, source, created_at, updated_at, duration,
                     language, engine, model, segment_count, word_count, full_text, segments_json, summary_json,
-                    translation_json, course, search_text, quiz_json)
+                    translation_json, course, search_text)
                 VALUES (:id, :title, :source_type, :source, :now, :now, :duration,
                     :language, :engine, :model, :segment_count, :word_count, :full_text, :segments_json,
-                    :summary_json, :translation_json, :course, :search_text, :quiz_json)
+                    :summary_json, :translation_json, :course, :search_text)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, source_type=excluded.source_type, source=excluded.source,
                     updated_at=excluded.updated_at, duration=excluded.duration, language=excluded.language,
@@ -151,7 +153,6 @@ class Archive:
                     word_count=excluded.word_count, full_text=excluded.full_text,
                     segments_json=excluded.segments_json,
                     summary_json=COALESCE(excluded.summary_json, transcripts.summary_json),
-                    quiz_json=COALESCE(excluded.quiz_json, transcripts.quiz_json),
                     translation_json=COALESCE(excluded.translation_json, transcripts.translation_json),
                     course=COALESCE(excluded.course, transcripts.course),
                     search_text=excluded.search_text
@@ -196,8 +197,7 @@ class Archive:
         item["summary"] = json.loads(raw_summary) if raw_summary else None
         raw_translation = item.pop("translation_json", None)
         item["translation"] = json.loads(raw_translation) if raw_translation else None
-        raw_quiz = item.pop("quiz_json", None)
-        item["quiz"] = json.loads(raw_quiz) if raw_quiz else None
+        item.pop("quiz_json", None)
         return item
 
     def _set_json(self, column: str, item_id: str, value: dict[str, Any] | None) -> None:
@@ -239,9 +239,6 @@ class Archive:
 
     def set_translation(self, item_id: str, translation: dict[str, Any] | None) -> None:
         self._set_json("translation_json", item_id, translation)
-
-    def set_quiz(self, item_id: str, quiz: dict[str, Any] | None) -> None:
-        self._set_json("quiz_json", item_id, quiz)
 
     def find_sources(self, sources: list[str]) -> dict[str, str]:
         """Map of source path → archive id for sources that were already transcribed."""
@@ -394,7 +391,7 @@ class Archive:
                         "ON CONFLICT(id) DO UPDATE SET "
                         + ", ".join(
                             f"{c}=COALESCE(excluded.{c}, transcripts.{c})"
-                            if c in ("summary_json", "translation_json", "course", "quiz_json")
+                            if c in ("summary_json", "translation_json", "course")
                             else f"{c}=excluded.{c}"
                             for c in cols
                             if c not in ("id", "created_at")

@@ -38,7 +38,10 @@ except ImportError:
 
 hiddenimports = []
 hiddenimports += collect_submodules("uvicorn")
-hiddenimports += ["app", "app.server", "app.jobs", "app.transcriber", "app.pdf_export", "app.db_export", "uharfbuzz"]
+# Every module of the app (many are imported lazily inside functions, which
+# PyInstaller can't see) — new modules are picked up without editing this file.
+hiddenimports += collect_submodules("app")
+hiddenimports += ["uharfbuzz"]
 # Database drivers are imported lazily, so PyInstaller can't see them on its own.
 # (pyodbc is a single extension module; it links to odbc32.dll, which ships with Windows.)
 hiddenimports += ["pyodbc"]
@@ -51,9 +54,7 @@ for pkg in ("pymssql", "oracledb", "cryptography", "pymysql", "psycopg", "psycop
 
 # YouTube: yt-dlp is imported lazily; its JavaScript solver (yt-dlp-ejs) is data,
 # and the Deno runtime binary from the `deno` pip package goes into _internal/deno/.
-hiddenimports += ["app.youtube", "app.cloud", "app.archive", "app.batch", "app.summarize", "app.translate", "app.subtitles", "app.course_tools"]
 hiddenimports += ["sentencepiece"]
-hiddenimports += ["app.documents", "app.course_site", "app.burn", "app.assistant"]
 binaries += collect_dynamic_libs("sentencepiece")
 try:
     hiddenimports += collect_submodules("yt_dlp")

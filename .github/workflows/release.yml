@@ -1,0 +1,71 @@
+# Builds the Windows installer (LocalTranscriber-Setup-<version>.exe) on GitHub's
+# Windows machines and attaches it to a GitHub Release.
+#
+# Publish a new version:  bump "version" in package.json, commit, then
+#   git tag v1.0.1 && git push origin v1.0.1
+# (or run this workflow by hand from the "Actions" tab: it then only uploads the
+# installer as a build artifact, without creating a release).
+#
+# Optional repository secret GROQ_API_KEY: bundled as the built-in free key
+# (builtin-keys.json is never committed).
+name: Windows installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Built-in key (optional)
+        shell: bash
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -n "$GROQ_API_KEY" ]; then
+            printf '{"cloud:groq":"%s"}\n' "$GROQ_API_KEY" > builtin-keys.json
+          else
+            echo '{}' > builtin-keys.json
+          fi
+
+      # Installs the Node packages and, through postinstall, the Python engine
+      # (CPU build: GitHub's machines have no NVIDIA GPU, which keeps the installer small).
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Build interface and engine
+        run: npm run build
+
+      - name: Build installer
+        run: npx electron-builder --win --publish never
+
+      - name: Upload installer (build artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalTranscriber-Setup
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+          generate_release_notes: true

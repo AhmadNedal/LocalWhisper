@@ -220,13 +220,6 @@ export const QuestionIcon = (p: IconProps) => (
     <path d="M12 16h.01" />
   </Icon>
 );
-export const QuizIcon = (p: IconProps) => (
-  <Icon {...p}>
-    <rect x="4" y="3" width="16" height="18" rx="2" />
-    <path d="m8 8 1.5 1.5L12 7" />
-    <path d="M14 8h3M8 14h.01M11 14h6M8 18h.01M11 18h6" />
-  </Icon>
-);
 export const FilmIcon = (p: IconProps) => (
   <Icon {...p}>
     <rect x="3" y="4" width="18" height="16" rx="2" />

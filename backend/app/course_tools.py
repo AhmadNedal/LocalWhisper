@@ -76,7 +76,6 @@ def payload_for(item: dict[str, Any], lesson_index: int | None) -> TranscriptPay
         or None,
         translation_language=translation.get("language") or "",
         summary=item.get("summary"),
-        quiz=item.get("quiz"),
         course=item.get("course") or "",
         lesson_index=lesson_index,
     )

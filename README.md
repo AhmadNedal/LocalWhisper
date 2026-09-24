@@ -34,7 +34,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Archive](#archive)
 - [Batch queue (whole folders)](#batch-queue-whole-folders)
 - [AI summary & chapters](#ai-summary--chapters)
-- [Ask the course & quizzes](#ask-the-course--quizzes)
+- [Ask the course](#ask-the-course)
 - [Translation & subtitles](#translation--subtitles)
 - [Player, exports & video with subtitles](#player-exports--video-with-subtitles)
 - [YouTube videos](#youtube-videos)
@@ -61,7 +61,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - 📚 **Batch queue** — add a whole course folder and let it transcribe overnight, one file after another, straight into the archive.
 - 🌐 **Translation & subtitles** — Arabic → English for free on your PC, or with DeepL / Azure / your AI key; bilingual view, SRT/VTT subtitles and a bilingual PDF.
 - ✨ **AI summary & chapters** — overview, key points and timed chapters with your own Claude / OpenAI / Cohere / Groq key (text only is sent).
-- 💬 **Ask the course & quizzes** — ask a question about a whole course and get the answer with the lesson and minute; multiple-choice / true-false questions for each lesson.
+- 💬 **Ask the course** — ask a question about a whole course and get the answer with the lesson and minute.
 - 🎞️ **Player synced with the text** — click any sentence to play from there; the current sentence is highlighted. Plus a **video with the subtitles burned in**, ready for YouTube or Instagram.
 - 🌍 **Course website** — export a course as a small offline website (a page per lesson, search across the course), plus Word, text and JSON exports.
 - 📊 **Statistics** — hours transcribed, per course and per month, and what still lacks a summary or translation.
@@ -256,16 +256,14 @@ Choose **Other model…** to type any model name from the provider's docs. The s
 > AI summaries can contain mistakes — review them before relying on them.
 
 
-**Free built-in key:** the app can ship a Groq key so summaries, quizzes and "Ask the course" work without any setup (default model `openai/gpt-oss-120b`). Put it in `builtin-keys.json` at the project root — `{"cloud:groq": "gsk_…"}` — it is ignored by git and copied into the installer. A key the user saves in the settings always takes priority. Note that anyone who has the installer can extract that key, and all users share its Groq limits.
+**Free built-in key:** the app can ship a Groq key so summaries and "Ask the course" work without any setup (default model `openai/gpt-oss-120b`). Put it in `builtin-keys.json` at the project root — `{"cloud:groq": "gsk_…"}` — it is ignored by git and copied into the installer. A key the user saves in the settings always takes priority. Note that anyone who has the installer can extract that key, and all users share its Groq limits.
 ---
 
-## Ask the course & quizzes
+## Ask the course
 
-Both use the same AI provider and key as the [AI summary](#ai-summary--chapters) — only text is sent.
+It uses the same AI provider and key as the [AI summary](#ai-summary--chapters) — only text is sent.
 
 **Ask the course** — open a course in the archive and click **Ask the course**. Type a question (e.g. *“Where are table joins explained?”*); the answer comes only from that course's transcripts, with citations like `Lesson 3 · 12:40` — click one to open that lesson at that minute. For big courses, the most relevant passages are picked on your PC first, so the question stays small and cheap.
-
-**Transcript quiz** — at the bottom of the page, under the summary, **Transcript quiz → Create quiz** writes multiple-choice and/or true-false questions (5 to 20) about the important ideas of the transcript. Click an option to check it: the right answer, a one-line explanation and a link to the minute where it is explained appear. The quiz is saved with the transcript in the archive, can be copied as text, and is available to the database as `@quiz` / `@quiz_json`.
 
 ---
 
@@ -295,7 +293,7 @@ Only the transcript **text** is sent to online methods — never audio or video.
 
 ## Player, exports & video with subtitles
 
-- **Player:** click **Player** above the transcript (or any `[00:12]` time) to play the file inside the app. The sentence being spoken is highlighted and the text follows it (turn off **Follow text** to read freely); clicking a time, a chapter, a paragraph in the reading view or a quiz time jumps there. Speed 0.75×–2×; `Ctrl+Space` plays/pauses and `Ctrl+←/→` skips 5 seconds. Transcripts of YouTube videos use YouTube's own player (internet needed). A format Chromium can't play (e.g. some AVI/WMV files) offers to open the file in your default player instead.
+- **Player:** click **Player** above the transcript (or any `[00:12]` time) to play the file inside the app. The sentence being spoken is highlighted and the text follows it (turn off **Follow text** to read freely); clicking a time, a chapter or a paragraph in the reading view jumps there. Speed 0.75×–2×; `Ctrl+Space` plays/pauses and `Ctrl+←/→` skips 5 seconds. Transcripts of YouTube videos use YouTube's own player (internet needed). A format Chromium can't play (e.g. some AVI/WMV files) offers to open the file in your default player instead.
 - **Other formats:** next to the PDF, **Word**, **Plain text** and **JSON** use the same options (reading or timed, original/translation/both, summary and chapters). The Word file is right-to-left for Arabic, with real headings (chapters show in Word's navigation pane). JSON has every sentence with its times, the translation and the summary — handy for your own website or scripts.
 - **Video with subtitles:** **Video with subtitles** writes a *new* MP4 with the text drawn on the picture — original, translation, or both (the translation smaller, in yellow, under the original). Choose the font size and a dark box or outline. It runs on your PC with FFmpeg; expect roughly half the video's length or more. The original video is never changed.
 
@@ -353,7 +351,7 @@ After transcribing, click **Insert into database** to write the transcript strai
 
 | Per row | Per file |
 |---|---|
-| `translation` — the translated text of the same time range, `text_en` — the same when the translation is English | `full_translation`, `full_text_en`, `translation_language`, `summary`, `key_points` (one per line), `chapters` (`00:05:12 Title` per line), `chapters_json`, `keywords` (comma-separated), `quiz` (the transcript quiz as text), `quiz_json`, `course` |
+| `translation` — the translated text of the same time range, `text_en` — the same when the translation is English | `full_translation`, `full_text_en`, `translation_language`, `summary`, `key_points` (one per line), `chapters` (`00:05:12 Title` per line), `chapters_json`, `keywords` (comma-separated), `course` |
 
 Example — Arabic text and English subtitles in one table:
 
@@ -468,7 +466,7 @@ For how it works internally (architecture, security model, performance), see **[
 - No analytics, no telemetry, no accounts, no API keys.
 - With a **paid provider** selected, the speech audio is uploaded to that provider (you choose this explicitly; the header shows it).
 - **Online translation** (AI key, DeepL, Azure) sends the transcript text (never audio) only when you translate; the free offline translation sends nothing.
-- **AI summaries, quizzes and “Ask the course”** send transcript text (never audio) to the provider you chose, only when you ask for one.
+- **AI summaries and “Ask the course”** send transcript text (never audio) to the provider you chose, only when you ask for one.
 - The **player** plays local files through the app's own local backend; only for a **YouTube** transcript does it load YouTube's player.
 - Otherwise, internet is used only for the one-time model download from the public [Hugging Face Hub](https://huggingface.co/Systran), and — when **you** paste a YouTube link — to fetch that video's captions or audio from YouTube.
 - The internal backend listens on `127.0.0.1` only and is protected by a random per-launch token.

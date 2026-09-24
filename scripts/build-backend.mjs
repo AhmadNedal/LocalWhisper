@@ -3,11 +3,17 @@
 // ships it inside the installer, so end users need no Python installation.
 import { rmSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { BACKEND_DIR, run, venvExists, venvPython } from "./lib/python.mjs";
 
 if (!venvExists()) {
-  console.error("[build:backend] backend/.venv missing — run `npm run setup` first.");
-  process.exit(1);
+  // First build on this computer: prepare the Python engine automatically.
+  console.log("[build:backend] Python environment missing — setting it up first…");
+  const setup = path.join(path.dirname(fileURLToPath(import.meta.url)), "setup-python.mjs");
+  if (run(process.execPath, [setup]) !== 0 || !venvExists()) {
+    console.error("[build:backend] Could not prepare the Python environment (see the messages above).");
+    process.exit(1);
+  }
 }
 const py = venvPython();
 

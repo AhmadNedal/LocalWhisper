@@ -8,7 +8,7 @@ import {
   type DbPreviewResult,
   type DbTestResult,
   type Segment,
-  type AiSummary, type QuizData,
+  type AiSummary,
 } from "@/lib/api";
 import type { DbMode, DbProfile, DbType } from "@/lib/desktop";
 import { errorMessage, type Strings, type UiLang } from "@/lib/i18n";
@@ -27,7 +27,6 @@ interface Props {
   translation?: { start: number; end: number; text: string }[] | null;
   translationLanguage?: string;
   summary?: AiSummary | null;
-  quiz?: QuizData | null;
   course?: string | null;
   onClose: () => void;
 }
@@ -70,7 +69,7 @@ const SQL_EXAMPLES: Record<DbType, { pre: string; sql: string }> = {
 const ROW_VARS = ["text", "start_seconds", "end_seconds", "start_time", "end_time", "segment_index"];
 const FILE_VARS = ["file_name", "file_path", "language", "model", "duration_seconds", "segment_count", "full_text", "transcribed_at"];
 /** Filled from the translation, the AI summary and the archive (NULL when missing). */
-const EXTRA_VARS: { name: string; needs: "translation" | "summary" | "course" | "quiz" }[] = [
+const EXTRA_VARS: { name: string; needs: "translation" | "summary" | "course" }[] = [
   { name: "translation", needs: "translation" },
   { name: "text_en", needs: "translation" },
   { name: "full_translation", needs: "translation" },
@@ -81,8 +80,6 @@ const EXTRA_VARS: { name: string; needs: "translation" | "summary" | "course" | 
   { name: "chapters", needs: "summary" },
   { name: "chapters_json", needs: "summary" },
   { name: "keywords", needs: "summary" },
-  { name: "quiz", needs: "quiz" },
-  { name: "quiz_json", needs: "quiz" },
   { name: "course", needs: "course" },
 ];
 const LAST_PROFILE_KEY = "db-last-profile";
@@ -119,7 +116,6 @@ export function DatabaseDialog({
   translation,
   translationLanguage,
   summary,
-  quiz,
   course,
   onClose,
 }: Props) {
@@ -186,10 +182,9 @@ export function DatabaseDialog({
       translation: translation ?? null,
       translation_language: translationLanguage ?? "",
       summary: summary ?? null,
-      quiz: quiz ?? null,
       course: course ?? "",
     }),
-    [form, fileName, filePath, language, model, duration, segments, translation, translationLanguage, summary, quiz, course],
+    [form, fileName, filePath, language, model, duration, segments, translation, translationLanguage, summary, course],
   );
 
   // ---- actions --------------------------------------------------------------
@@ -530,9 +525,7 @@ export function DatabaseDialog({
                     ? Boolean(translation?.length)
                     : needs === "summary"
                       ? Boolean(summary)
-                      : needs === "quiz"
-                        ? Boolean(quiz)
-                        : Boolean(course);
+                      : Boolean(course);
                 return (
                   <button
                     key={name}
@@ -546,9 +539,7 @@ export function DatabaseDialog({
                               ? "dbVarNeedsTranslation"
                               : needs === "summary"
                                 ? "dbVarNeedsSummary"
-                                : needs === "quiz"
-                                  ? "dbVarNeedsQuiz"
-                                  : "dbVarNeedsCourse"
+                                : "dbVarNeedsCourse"
                           ]
                     }
                     onClick={() => insertVariable(name)}

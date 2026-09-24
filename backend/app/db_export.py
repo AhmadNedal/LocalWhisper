@@ -73,8 +73,6 @@ FILE_VARIABLES = (
     "chapters",
     "chapters_json",
     "keywords",
-    "quiz",
-    "quiz_json",
     "course",
     # Per lesson when inserting a whole course or from the queue (1-based order in the course)
     "lesson_index",
@@ -99,7 +97,6 @@ class TranscriptPayload:
     summary: dict[str, Any] | None = None
     course: str = ""
     lesson_index: int | None = None
-    quiz: dict[str, Any] | None = None
 
 
 @dataclass
@@ -317,19 +314,11 @@ def _extra_file_values(payload: TranscriptPayload) -> dict[str, Any]:
         if chapters
         else None,
         "keywords": ", ".join(keywords) or None,
-        "quiz": _quiz_text(payload.quiz) or None,
-        "quiz_json": json.dumps(payload.quiz.get("questions") or [], ensure_ascii=False) if payload.quiz else None,
         "course": payload.course.strip() or None,
         "lesson_index": payload.lesson_index,
         "lesson_title": _lesson_title(payload.file_name),
         "youtube_id": _youtube_id(payload.file_path),
     }
-
-
-def _quiz_text(data: dict[str, Any] | None) -> str:
-    from .assistant import quiz_text
-
-    return quiz_text(data)
 
 
 def _lesson_title(name: str) -> str | None:
