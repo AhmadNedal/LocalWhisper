@@ -102,8 +102,8 @@ python --version
 
 ```bash
 # 1. Get the code
-git clone https://github.com/<your-username>/windowsApplication.git
-cd windowsApplication
+git clone https://github.com/<your-username>/LocalWhisper.git
+cd LocalWhisper
 
 # 2. Install everything (JavaScript + Python environment + FFmpeg)
 npm install
@@ -431,7 +431,7 @@ The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and
 ## Project structure
 
 ```
-windowsApplication/
+LocalWhisper/
 ├── electron/          # Windows desktop shell (window, dialogs, starts the backend)
 ├── frontend/          # User interface — Next.js + React + TypeScript
 ├── backend/           # Python — faster-whisper, FFmpeg, PDF export (FastAPI, local only)
