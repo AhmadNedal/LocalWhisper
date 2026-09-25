@@ -19,6 +19,9 @@ class ErrorCode(str, Enum):
     MODEL_DOWNLOAD_FAILED = "model_download_failed"
     MODEL_NOT_DOWNLOADED_OFFLINE = "model_not_downloaded_offline"
     MODEL_LOAD_FAILED = "model_load_failed"
+    LIVE_MODEL_MISSING = "live_model_missing"  # live mode needs the model downloaded first
+    FREE_LIMIT = "free_limit"  # the free AI allowance of the day is used up
+    FREE_AI_UNAVAILABLE = "free_ai_unavailable"  # the free AI relay refused (session, disabled)
     INSUFFICIENT_MEMORY = "insufficient_memory"
     CUDA_UNAVAILABLE = "cuda_unavailable"
     NO_SPEECH = "no_speech"

@@ -48,7 +48,7 @@ type Step = "form" | "code";
 function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (user: AuthUser) => void }) {
   const [lang, setLang] = usePersistentState<UiLang>("ui-lang", "ar");
   const t = STRINGS[lang];
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "reset">("login");
   const [step, setStep] = useState<Step>("form");
   const [options, setOptions] = useState<AuthOptions | null>(null);
   const [name, setName] = useState("");
@@ -89,6 +89,7 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
 
   const countries = useMemo(() => countryGroups(lang), [lang]);
   const minLength = options?.minPasswordLength ?? 8;
+  const canReset = Boolean(window.desktop?.authSendResetCode) && options?.passwordReset !== false;
   const canRegister = Boolean(window.desktop?.authRegister) && options?.allowRegistration !== false;
   // Only an older service that explicitly says so skips the e-mailed code.
   const needsCode = Boolean(window.desktop?.authSendCode) && !(options?.reachable && options.requireEmailVerification === false);
@@ -131,12 +132,14 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
         return t.verifyErrTooSoon.replace("{s}", String(res.retryAfter ?? 60));
       case "email_send_failed":
         return t.verifyErrSend;
+      case "reset_unsupported":
+        return t.resetErrUnsupported;
       default:
         return t.loginErrServer.replace("{status}", String(res.status ?? ""));
     }
   };
 
-  const switchMode = (next: "login" | "register") => {
+  const switchMode = (next: "login" | "register" | "reset") => {
     setMode(next);
     setStep("form");
     setError(null);
@@ -202,6 +205,78 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
     // A detail the service rejected: fix it in the form.
     if (step === "code" && !["too_many", "network", "server", "email_send_failed"].includes(res.code)) setStep("form");
     setError(message(res));
+  };
+
+  // ---- Forgot password: e-mail → code + new password → signed in ----------
+  const sendResetCode = async (again: boolean) => {
+    const res = await window.desktop!.authSendResetCode!({ email: email.trim(), lang });
+    if (res.ok) {
+      startCountdown(res.resendAfterSeconds, res.expiresInSeconds);
+      setStep("code");
+      setCode("");
+      if (again) setNotice(t.verifyResent);
+      return;
+    }
+    if (res.code === "resend_too_soon") {
+      startCountdown(res.retryAfter ?? options?.resendSeconds ?? 60);
+      setStep("code");
+      if (again) setError(message(res));
+      return;
+    }
+    setError(message(res));
+  };
+
+  const submitReset = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setError(null);
+    setNotice(null);
+    if (step === "form") {
+      if (!email.trim()) {
+        setError(t.loginErrMissing);
+        return;
+      }
+      void run(() => sendResetCode(false));
+      return;
+    }
+    if (code.length !== 6) {
+      setError(t.verifyErrRequired);
+      return;
+    }
+    if (password.length < minLength || !/[\p{L}]/u.test(password) || !/\d/.test(password)) {
+      setError(t.registerErrWeak.replace("{n}", String(minLength)));
+      return;
+    }
+    if (password !== confirm) {
+      setError(t.registerErrConfirm);
+      return;
+    }
+    void run(async () => {
+      const res = await window.desktop!.authResetPassword!({ email: email.trim(), code, password, remember });
+      if (res.ok) {
+        setPassword("");
+        setConfirm("");
+        setCode("");
+        onSignedIn(res.user);
+        return;
+      }
+      if (res.code === "pending" || res.code === "disabled") {
+        // The password did change; the account itself can't sign in yet.
+        setMode("login");
+        setStep("form");
+        setPassword("");
+        setConfirm("");
+        setCode("");
+        setNotice(`${t.resetDone} ${message(res)}`);
+        return;
+      }
+      if (res.code === "invalid_code" || res.code === "code_expired") {
+        setCode("");
+        if (res.code === "code_expired") setExpiresAt(Date.now());
+        codeRef.current?.focus();
+      }
+      setError(message(res));
+    });
   };
 
   const run = async (work: () => Promise<void>) => {
@@ -279,17 +354,13 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
   };
 
   const onCodeChange = (raw: string) => {
-    // Accept pasted codes like "123 456" or Arabic-Indic digits.
-    const digits = raw
-      .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
-      .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
-      .replace(/\D/g, "")
-      .slice(0, 6);
+    const digits = digitsOnly(raw);
     setCode(digits);
     if (digits.length === 6 && !busy) verify(digits);
   };
 
   const register = mode === "register";
+  const resetting = mode === "reset";
   const resendIn = Math.max(0, Math.ceil((resendAt - now) / 1000));
   const expiresIn = Math.max(0, Math.ceil((expiresAt - now) / 1000));
   const clock = (secs: number) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
@@ -341,7 +412,106 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
           <GlobeIcon size={16} /> {t.switchLang}
         </button>
 
-        {register && step === "code" ? (
+        {resetting ? (
+          <form className="login-card" onSubmit={submitReset} noValidate>
+            <span className="login-logo small">
+              <KeyIcon />
+            </span>
+            <h2>{t.resetTitle}</h2>
+            {step === "form" ? (
+              <>
+                <p className="login-sub">{t.resetSubtitle}</p>
+                <label className="login-field">
+                  <span>{t.loginEmail}</span>
+                  <input
+                    type="email"
+                    dir="ltr"
+                    autoComplete="username"
+                    autoFocus
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    disabled={busy}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <p className="login-sub">
+                  {t.resetCodeSubtitle}{" "}
+                  <bdi className="login-email-chip" dir="ltr">
+                    {email.trim()}
+                  </bdi>
+                </p>
+                <label className="login-field">
+                  <span>{t.verifyCode}</span>
+                  <input
+                    ref={codeRef}
+                    className="otp-input"
+                    type="text"
+                    dir="ltr"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="••••••"
+                    value={code}
+                    onChange={(e) => setCode(digitsOnly(e.target.value))}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="otp-meta">
+                  {expiresAt ? (
+                    <span className={expiresIn === 0 ? "is-expired" : ""}>
+                      {expiresIn === 0 ? t.verifyExpired : t.verifyExpires.replace("{time}", clock(expiresIn))}
+                    </span>
+                  ) : (
+                    <span />
+                  )}
+                  <button type="button" className="link-btn" disabled={busy || resendIn > 0} onClick={() => void run(() => sendResetCode(true))}>
+                    {resendIn > 0 ? t.verifyResendIn.replace("{s}", String(resendIn)) : t.verifyResend}
+                  </button>
+                </div>
+                <label className="login-field">
+                  <span>{t.resetNewPassword}</span>
+                  <span className="login-pass">
+                    <input
+                      type={show ? "text" : "password"}
+                      dir="ltr"
+                      autoComplete="new-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      disabled={busy}
+                    />
+                    <button type="button" className="link-btn" onClick={() => setShow((v) => !v)} tabIndex={-1}>
+                      {show ? t.dbHide : t.dbShow}
+                    </button>
+                  </span>
+                  <small className="login-help">{t.registerPasswordHint.replace("{n}", String(minLength))}</small>
+                </label>
+                <label className="login-field">
+                  <span>{t.registerConfirm}</span>
+                  <input
+                    type={show ? "text" : "password"}
+                    dir="ltr"
+                    autoComplete="new-password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+              </>
+            )}
+
+            {alerts}
+
+            <button type="submit" className="btn btn-accent login-submit" disabled={busy}>
+              {busy ? <span className="spinner small" /> : null} {busy ? t.loginWorking : step === "form" ? t.resetSendCode : t.resetButton}
+            </button>
+            <button type="button" className="btn btn-subtle login-back" disabled={busy} onClick={() => switchMode("login")}>
+              {t.resetBack}
+            </button>
+            <p className="login-foot">{step === "form" ? t.resetHint : t.resetSignsOut}</p>
+          </form>
+        ) : register && step === "code" ? (
           <form
             className="login-card"
             onSubmit={(e) => {
@@ -488,6 +658,11 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
                 </button>
               </span>
               {register ? <small className="login-help">{t.registerPasswordHint.replace("{n}", String(minLength))}</small> : null}
+              {!register && canReset ? (
+                <button type="button" className="link-btn login-forgot" onClick={() => switchMode("reset")} disabled={busy}>
+                  {t.resetLink}
+                </button>
+              ) : null}
             </label>
             {register ? (
               <label className="login-field">
@@ -519,6 +694,24 @@ function LoginScreen({ siteName, onSignedIn }: { siteName: string; onSignedIn: (
         )}
       </main>
     </div>
+  );
+}
+
+/** Accept pasted codes like "123 456" or Arabic-Indic digits. */
+function digitsOnly(raw: string): string {
+  return raw
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\D/g, "")
+    .slice(0, 6);
+}
+
+function KeyIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="15" r="4" />
+      <path d="m10.8 12.2 8.7-8.7M16 7l2.5 2.5M18.5 4.5 21 7" />
+    </svg>
   );
 }
 

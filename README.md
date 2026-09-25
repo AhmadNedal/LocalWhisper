@@ -29,6 +29,7 @@ Drop a video → it's transcribed **on your own PC** → edit the text → expor
 - [Quick start](#quick-start)
 - [Sign-in](#sign-in)
 - [How to use](#how-to-use)
+- [Live transcription](#live-transcription)
 - [Choosing a model](#choosing-a-model)
 - [Paid providers (Cohere, OpenAI, Groq)](#paid-providers-cohere-openai-groq)
 - [Archive](#archive)
@@ -122,7 +123,7 @@ That's it. The app window opens after a few seconds.
 
 ## Sign-in
 
-The app opens on a **sign-in screen** with two tabs: **Sign in** and **Create account**. Accounts live in the central service **WindowsAppLoginBackend** (a separate ASP.NET Core project; see its README): `auth-config.json` → `apiBaseUrl` points at it (`http://localhost:5080` while developing; set the published address before building the installer). The first account created becomes the administrator. **Remember me on this computer** keeps you signed in (encrypted with Windows DPAPI) until the token expires, and the session is re-checked with the service at each launch, so a disabled account or a changed password signs the app out; without internet the remembered session keeps working. **Sign out** is in the top bar.
+The app opens on a **sign-in screen** with two tabs: **Sign in** and **Create account**. Accounts live in the central service **WindowsAppLoginBackend** (a separate ASP.NET Core project; see its README): `auth-config.json` → `apiBaseUrl` points at it (`http://localhost:5080` while developing; set the published address before building the installer). The first account created becomes the administrator. **Remember me on this computer** keeps you signed in (encrypted with Windows DPAPI) until the token expires, and the session is re-checked with the service at each launch, so a disabled account or a changed password signs the app out; without internet the remembered session keeps working. **Sign out** is in the top bar. **Forgot password?** under the password field e-mails a 6-digit code; entering it with a new password signs you in and signs the account out on every other device.
 
 The lock is in Electron's main process: until sign-in succeeds the window gets no connection to the local transcription engine and no saved keys, so hiding the screen doesn't unlock anything. `"enabled": false` in `auth-config.json` switches sign-in off in development only — an installed copy always asks. Only the sign-in request uses the internet; transcription stays local.
 
@@ -141,6 +142,19 @@ The lock is in Electron's main process: until sign-in succeeds the window gets n
 5. **Edit** any line directly, **search** the text, or switch to the **Reading view**.
 6. Click **Export PDF** (or **Save as…**). Choose whether to include timestamps.
 7. Use **Open output folder** to find your PDFs (default: `Documents\Local Transcriber`).
+
+---
+
+## Live transcription
+
+**Live transcription** (under the YouTube box) turns speech into text while it is spoken:
+
+- **Microphone** — an in-person lecture or voice notes; **Computer audio** — whatever the PC plays (a Zoom/Teams lecture, a YouTube video; Windows only); **Both** — an online meeting you speak in.
+- Text appears a second or two after each sentence (a pause ends a sentence; long speech is cut at a natural pause every ~14 s). If the PC is slower than the speech it shows how far behind it is and catches up.
+- It uses the **local model and language chosen in the transcription settings** (Whisper or Cohere Arabic) — nothing is uploaded. `small`/`large-v3-turbo` on a GPU, or `base`/`small` on a CPU, keep up best.
+- **Stop & save** transcribes the last words and saves the transcript to the **archive** (in the course you picked). The audio recording is kept too (`Local Transcriber\Live recordings\*.m4a` in the output folder), so the saved transcript opens with its player like any file. **Discard** throws the session away.
+- A file transcription or the queue can't run at the same time (the queue waits).
+- If Windows blocks the microphone: *Settings → Privacy & security → Microphone → Let desktop apps access your microphone*.
 
 ---
 
@@ -196,6 +210,7 @@ Every transcript is saved automatically in a local archive — files, YouTube li
   - **Insert course into database** — every lesson is inserted with a saved database profile (each lesson in its own transaction). Extra per-lesson variables: `@lesson_index` (its number in the course, by title order), `@lesson_title`, `@course`, `@youtube_id`. **Preview** shows the rows of the first lesson first.
   - **Export course** — one folder with `01 - Lesson.pdf`, `01 - Lesson.ar.srt`, `01 - Lesson.en.srt`… per lesson (PDF layout, content and subtitle format are yours to choose) plus an `index.csv` listing every lesson — ready to upload to your platform.
 - **Courses:** a folder or a YouTube playlist added to the queue becomes a course automatically (the folder name / playlist title). The archive's side list shows every course with its count; rename a course, or put any transcript in a course (or take it out) from its row. Searching also matches course names.
+- **Find & replace:** fix a name or term the model keeps getting wrong in every lecture at once (e.g. "Jango" → "Django"). It works on the selected course (or the whole archive), ignores Arabic diacritics and letter variants unless **Exact match** is ticked, shows each match in context so you can untick lectures, can also fix the summaries, and **Undo** puts back the text from before the last replacement.
 - **Statistics:** the **Statistics** button shows hours transcribed (total, per month and per course) and, per course, how many lessons still have no summary or translation. Click a course to open it.
 - **Course website:** in **Export course**, tick **Mini website for the course** to get a `website` folder: `index.html` lists the lessons and searches the whole course (Arabic-insensitive), and each lesson page has the summary, clickable chapters, the text and the translation behind a button, plus links to the lesson's PDF/Word/subtitles. It works straight from the folder without internet, or uploaded to any hosting. The same dialog can also add **Word**, **plain text** and **JSON** files per lesson.
 - **Backup & move to another PC:** **Back up** saves the whole archive — transcripts, edits, summaries, translations and courses — to one `.ltbackup` file. On the other computer, open the archive and click **Restore**: entries are merged (new ones added, nothing deleted, and an entry edited more recently on that computer is kept). API keys and database passwords are *not* included, because they are encrypted for each computer.
@@ -259,7 +274,7 @@ Choose **Other model…** to type any model name from the provider's docs. The s
 > AI summaries can contain mistakes — review them before relying on them.
 
 
-**Free built-in key:** the app can ship a Groq key so summaries and "Ask the course" work without any setup (default model `openai/gpt-oss-120b`). Put it in `builtin-keys.json` at the project root — `{"cloud:groq": "gsk_…"}` — it is ignored by git and copied into the installer. A key the user saves in the settings always takes priority. Note that anyone who has the installer can extract that key, and all users share its Groq limits.
+**Free AI without a key:** when the user hasn't saved a Groq key of their own, summaries, translation, "Ask the course" and Groq cloud transcription go **through the account server** (WindowsAppLoginBackend): the app sends the request with the user's session, and the server adds the real key (kept only there, in `appsettings.Secrets.json` under `Ai:Groq:ApiKey`) and applies a **daily allowance per user** (`Ai:DailyChatRequests`, `Ai:DailyAudioMB`; administrators are unlimited). No key ships inside the installer. A key the user saves goes straight to Groq with no server limits. (Development only: `builtin-keys.json` at the project root still works under `npm run dev`; it never goes into the installer.)
 ---
 
 ## Ask the course
@@ -407,6 +422,19 @@ This produces `release/LocalTranscriber-Setup-<version>.exe` — a normal Window
 | `npm run build` | Only builds the UI and the backend |
 
 > If the build machine has an NVIDIA GPU, the CUDA libraries are bundled (~+800 MB) so GPU acceleration works for end users. For a smaller CPU-only installer, run `npm run setup:cpu` in a fresh clone before `npm run dist`.
+
+### Automatic updates
+
+The installed app looks for a newer version in the GitHub **Releases** (20 seconds after it opens, then every 6 hours, or with the ↻ button in the top bar), downloads it in the background, then shows **Restart to update**; if the user doesn't click it, the update installs silently when the app closes. Models, archive and settings are kept.
+
+To publish an update:
+
+1. Raise `version` in `package.json` (e.g. `1.0.1`) and run `npm run dist`.
+2. On GitHub: **Releases → Draft a new release**, tag `v1.0.1`.
+3. Upload **all three files** from `release/`: `LocalTranscriber-Setup-1.0.1.exe`, `LocalTranscriber-Setup-1.0.1.exe.blockmap` and **`latest.yml`** (the file installed copies read).
+4. Keep **Set as the latest release** ticked and publish.
+
+> The Cohere model files release (`cohere-arabic-model`) isn't an app release: untick "Set as the latest release" (or mark it pre-release) when creating it, so it never becomes "latest".
 
 The installed app stores models in `%LOCALAPPDATA%\Local Transcriber\models` and logs in `%APPDATA%\Local Transcriber\logs`.
 

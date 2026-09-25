@@ -26,6 +26,8 @@ import { ArchiveDialog } from "./ArchiveDialog";
 import { loadUsableProfiles, profileToDb } from "@/lib/dbProfiles";
 import { WatchDialog } from "./WatchDialog";
 import { LogsDialog } from "./LogsDialog";
+import { UpdateButton } from "./UpdateButton";
+import { LiveDialog } from "./LiveDialog";
 import { BatchDialog, type BatchPrefs } from "./BatchDialog";
 import {
   DEFAULT_SUMMARY_SETTINGS,
@@ -55,6 +57,7 @@ import {
   WaveIcon,
   WatchFolderIcon,
   LogIcon,
+  MicIcon,
 } from "./Icons";
 import { MediaPicker } from "./MediaPicker";
 import { ProgressPanel } from "./ProgressPanel";
@@ -237,6 +240,7 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [watch, setWatch] = useState<WatchState | null>(null);
   const [watchOpen, setWatchOpen] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState<null | "all" | "error">(null);
   const [logAlerts, setLogAlerts] = useState(0);
   const [batchOpen, setBatchOpen] = useState(false);
@@ -1182,6 +1186,14 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
   ]
     .filter(Boolean)
     .join(" · ");
+  // Live transcription always runs a local model (the one chosen in the settings).
+  const liveSettingsLabel = [
+    settings.model ?? "",
+    settings.language === "auto" ? t.autoDetect : languageName(settings.language, lang),
+    settings.device.toUpperCase(),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const batchDone = batch?.counts.done ?? 0;
   const batchTotal = batch?.items.length ?? 0;
 
@@ -1227,6 +1239,7 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
           </div>
         </div>
         <div className="titlebar-actions">
+          <UpdateButton t={t} busy={running || batchState !== "idle"} />
           <button
             className={`btn btn-subtle logs-btn${logAlerts ? " has-alerts" : ""}`}
             onClick={() => {
@@ -1430,6 +1443,23 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
               setBatchOpen(true);
             }}
           />
+          <section className="card live-card">
+            <span className="live-badge" aria-hidden="true">
+              <MicIcon size={18} />
+            </span>
+            <div className="live-card-text">
+              <strong>{t.liveCardTitle}</strong>
+              <span>{t.liveCardHint}</span>
+            </div>
+            <button
+              className="btn"
+              onClick={() => setLiveOpen(true)}
+              disabled={!client || running || batchState !== "idle"}
+              title={batchState !== "idle" ? t.liveBusy : undefined}
+            >
+              {t.liveCardButton}
+            </button>
+          </section>
           <ProgressPanel
             t={t}
             lang={lang}
@@ -1635,6 +1665,21 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
           onDeleted={(id) => {
             if (id === archiveIdRef.current) resetArchive();
           }}
+          onEdited={async (ids) => {
+            // Find & replace changed the open transcript: show the new text.
+            const id = archiveIdRef.current;
+            if (!id || !(ids.includes(id) || ids.includes("*")) || !client) return;
+            try {
+              const item = await client.archiveGet(id);
+              if (archiveIdRef.current !== id) return;
+              setSegments(item.segments);
+              setSummary(item.summary ?? null);
+              transcriptGen.current += 1;
+              lastArchived.current = archiveKey(item.title, item.segments, item.summary, item.translation);
+            } catch {
+              /* keep what is shown */
+            }
+          }}
           onClose={() => setArchiveOpen(false)}
         />
       ) : null}
@@ -1660,6 +1705,32 @@ export function TranscriberApp({ account }: { account?: Account } = {}) {
             setBatchOpen(true);
           }}
           onClose={() => setWatchOpen(false)}
+        />
+      ) : null}
+
+      {liveOpen && client ? (
+        <LiveDialog
+          t={t}
+          lang={lang}
+          client={client}
+          params={
+            settings.model
+              ? {
+                  model: settings.model,
+                  language: settings.language === "auto" ? null : settings.language,
+                  device: settings.device,
+                  preset: settings.preset,
+                  arabic_punctuation: settings.arabicPunctuation,
+                  vocabulary: settings.vocabulary ?? "",
+                }
+              : null
+          }
+          settingsLabel={liveSettingsLabel}
+          onOpen={async (id) => {
+            setLiveOpen(false);
+            await openArchived(id);
+          }}
+          onClose={() => setLiveOpen(false)}
         />
       ) : null}
 

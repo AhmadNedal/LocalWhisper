@@ -9,13 +9,14 @@
  * - Provide native features to the UI through a minimal, typed preload bridge:
  *   file dialogs, drag & drop paths, "show in folder".
  */
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, powerSaveBlocker, protocol, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, powerSaveBlocker, protocol, safeStorage, session, shell, Tray } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { BackendProcess } = require("./backend");
 const { AuthGate } = require("./auth");
 const { Logger } = require("./logger");
+const { Updater } = require("./updater");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
 const UI_ROOT = path.join(__dirname, "..", "frontend", "out");
@@ -43,6 +44,8 @@ process.on("uncaughtException", (err) => logger.error(`Main process error: ${err
 process.on("unhandledRejection", (reason) => logger.error(`Main process unhandled rejection: ${/** @type {any} */ (reason)?.stack || reason}`));
 
 const backend = new BackendProcess();
+const updater = new Updater({ app, logger });
+updater.on("state", (/** @type {any} */ state) => mainWindow?.webContents.send("update:state", state));
 backend.on("line", (/** @type {string} */ line, /** @type {"stdout" | "stderr"} */ stream) => logger.backendLine(line, stream));
 backend.on("status", (/** @type {any} */ s) => {
   if (s.state === "ready") logger.info(`Backend connection ready at ${s.url}`);
@@ -252,6 +255,17 @@ function registerIpc() {
     if (res.ok) mainWindow?.webContents.send("backend:status", await backend.start());
     return res;
   });
+  ipcMain.handle("auth:sendResetCode", async (_event, /** @type {any} */ details) => {
+    const res = await auth.sendResetCode(details || {});
+    logAuth("Forgot password: send reset code", res, String(details?.email || ""));
+    return res;
+  });
+  ipcMain.handle("auth:resetPassword", async (_event, /** @type {any} */ details) => {
+    const res = await auth.resetPassword(details || {});
+    logAuth("Forgot password: set new password", res, String(details?.email || ""));
+    if (res.ok) mainWindow?.webContents.send("backend:status", await backend.start());
+    return res;
+  });
   ipcMain.handle("auth:login", async (_event, /** @type {string} */ email, /** @type {string} */ password, /** @type {boolean} */ remember) => {
     const res = await auth.login(email, password, Boolean(remember));
     logAuth("Sign-in", res, String(email || ""));
@@ -299,6 +313,38 @@ function registerIpc() {
   });
 
   // ---- Log viewer ------------------------------------------------------------
+  // ---- Live transcription: computer audio ("what you hear") ----
+  // getDisplayMedia() is answered with the screen + Windows loopback audio, but
+  // only right after the live window asked for it (never for anything else);
+  // the page keeps the audio track and drops the video at once.
+  let loopbackUntil = 0;
+  ipcMain.handle("live:prepareSystemAudio", () => {
+    if (process.platform !== "win32") return false;
+    loopbackUntil = Date.now() + 15000;
+    return true;
+  });
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    if (Date.now() > loopbackUntil) {
+      callback({});
+      return;
+    }
+    loopbackUntil = 0;
+    desktopCapturer
+      .getSources({ types: ["screen"] })
+      .then((sources) => (sources[0] ? callback({ video: sources[0], audio: "loopback" }) : callback({})))
+      .catch(() => callback({}));
+  });
+
+  // ---- Updates (installed app only) ----
+  ipcMain.handle("update:get", () => updater.state);
+  ipcMain.handle("update:check", () => updater.check(true));
+  ipcMain.handle("update:install", async () => {
+    if (!updater.ready) return false;
+    logger.info("Updates: restart to update (asked by the user)");
+    await backend.stopAndWait();
+    return updater.install({ silent: true, relaunch: true });
+  });
+
   ipcMain.handle("log:get", (_event, /** @type {number} */ afterRev) => logger.since(Number(afterRev) || 0));
   ipcMain.handle("log:write", (_event, /** @type {string} */ level, /** @type {string} */ message) => {
     const lv = ["info", "warn", "error"].includes(level) ? /** @type {"info" | "warn" | "error"} */ (level) : "info";
@@ -482,15 +528,14 @@ function registerIpc() {
     }
   };
 
-  // Built-in keys shipped with the app (builtin-keys.json next to the app, not in git):
-  // used for a provider only while the user hasn't saved a key of their own.
+  // Development only: builtin-keys.json in the project folder (not in git, not in the
+  // installer). Installed copies use the account server's relay instead (proxyKey).
   /** @type {Record<string, string> | null} */
   let builtinCache = null;
   const builtinKeys = () => {
     if (builtinCache) return builtinCache;
-    const file = app.isPackaged
-      ? path.join(process.resourcesPath, "builtin-keys.json")
-      : path.join(__dirname, "..", "builtin-keys.json");
+    if (app.isPackaged) return (builtinCache = {});
+    const file = path.join(__dirname, "..", "builtin-keys.json");
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf8")) || {};
       builtinCache = Object.fromEntries(
@@ -512,13 +557,24 @@ function registerIpc() {
     }
   };
 
-  // The key to use: the user's own, else the built-in one.
+  // Free AI without a key in the app: Groq requests go through the account server,
+  // signed with the user's session; the server holds the real key and a daily allowance.
+  const PROXIED = new Set(["cloud:groq"]);
+  /** @param {string} name */
+  const proxyKey = (name) =>
+    PROXIED.has(String(name)) && auth.config.enabled && auth.session?.token && backend.aiProxy
+      ? `lt-proxy:${auth.session.token}`
+      : "";
+
+  // The key to use: the user's own, else the free relay, else a development key file.
   ipcMain.handle("secrets:get", (_event, /** @type {string} */ name) =>
-    auth.isAuthenticated() ? storedSecret(name) || builtinKeys()[String(name)] || "" : "",
+    auth.isAuthenticated() ? storedSecret(name) || proxyKey(name) || builtinKeys()[String(name)] || "" : "",
   );
   // Only the user's own key (settings fields never show the built-in key).
   ipcMain.handle("secrets:getStored", (_event, /** @type {string} */ name) => (auth.isAuthenticated() ? storedSecret(name) : ""));
-  ipcMain.handle("secrets:hasBuiltin", (_event, /** @type {string} */ name) => Boolean(builtinKeys()[String(name)]));
+  ipcMain.handle("secrets:hasBuiltin", (_event, /** @type {string} */ name) =>
+    Boolean(proxyKey(name) || builtinKeys()[String(name)]),
+  );
 
   ipcMain.handle("secrets:set", (_event, /** @type {string} */ name, /** @type {string} */ value) => {
     if (!safeStorage.isEncryptionAvailable()) return { ok: false, encrypted: false };
@@ -544,16 +600,25 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   registerAppProtocol();
   auth = new AuthGate({ app, safeStorage, net, rootDir: path.join(__dirname, "..") });
+  backend.aiProxy = auth.config.enabled ? String(auth.config.apiBaseUrl || "").replace(/\/+$/, "") : "";
   registerIpc();
   backend.start(); // start early; the UI awaits readiness
   createWindow();
+  updater.start();
 });
 
 app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   quitting = true;
+  // A downloaded update is installed when the app quits: stop the engine first
+  // (and wait for it) so none of its files are in use, then run the installer silently.
+  if (updater.ready && !updater.installing) {
+    event.preventDefault();
+    backend.stopAndWait().finally(() => updater.install({ silent: true, relaunch: false }));
+    return;
+  }
   backend.stop();
 });

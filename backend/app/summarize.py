@@ -23,6 +23,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
+from . import ai_proxy
 from .errors import AppError, Cancelled, ErrorCode
 
 log = logging.getLogger(__name__)
@@ -308,7 +309,8 @@ def _request_spec(prov: LlmProvider, model: str, api_key: str, system: str, user
     # Reasoning models: keep thinking short — summarizing doesn't need much.
     if re.match(r"^(gpt-5|o\d)", model) or "gpt-oss" in model:
         body["reasoning_effort"] = "low"
-    return url, {"Authorization": f"Bearer {api_key}"}, body
+    url, headers = ai_proxy.bearer(url, api_key)
+    return url, headers, body
 
 
 def _extract_text(prov: LlmProvider, payload: dict[str, Any]) -> str:
@@ -342,8 +344,14 @@ def chat(prov: LlmProvider, model: str, api_key: str, system: str, user: str, ca
                 return _extract_text(prov, resp.json())
             except ValueError as exc:
                 raise AppError(ErrorCode.SUMMARY_FAILED, "Provider returned invalid JSON") from exc
-        err = _error_from_response(resp.status_code, resp.text)
-        retryable = resp.status_code in (429, 500, 502, 503, 504, 529) and err.code != ErrorCode.CLOUD_QUOTA
+        err = (ai_proxy.is_proxy(api_key) and ai_proxy.error(resp.status_code, resp.text)) or _error_from_response(
+            resp.status_code, resp.text
+        )
+        retryable = resp.status_code in (429, 500, 502, 503, 504, 529) and err.code not in (
+            ErrorCode.CLOUD_QUOTA,
+            ErrorCode.FREE_LIMIT,
+            ErrorCode.FREE_AI_UNAVAILABLE,
+        )
         if retryable and attempt < MAX_RETRIES:
             retry_after = resp.headers.get("retry-after", "")
             wait_s = float(retry_after) if re.fullmatch(r"\d+(\.\d+)?", retry_after) else delay
@@ -501,18 +509,19 @@ def test_key(provider_id: str, api_key: str) -> dict[str, Any]:
     key = api_key.strip()
     if not key:
         raise AppError(ErrorCode.CLOUD_AUTH, "No API key")
-    headers = (
-        {"x-api-key": key, "anthropic-version": "2023-06-01"}
-        if prov.id == "anthropic"
-        else {"Authorization": f"Bearer {key}"}
-    )
+    if prov.id == "anthropic":
+        url, headers = prov.check_url, {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    else:
+        url, headers = ai_proxy.bearer(prov.check_url, key)
     try:
-        resp = httpx.get(prov.check_url, headers=headers, timeout=20)
+        resp = httpx.get(url, headers=headers, timeout=20)
     except httpx.HTTPError as exc:
         raise AppError(ErrorCode.CLOUD_NETWORK, f"{exc.__class__.__name__}: {exc}"[:300]) from exc
     if resp.status_code == 200:
         return {"ok": True, "provider": prov.name}
-    raise _error_from_response(resp.status_code, resp.text)
+    raise (ai_proxy.is_proxy(key) and ai_proxy.error(resp.status_code, resp.text)) or _error_from_response(
+        resp.status_code, resp.text
+    )
 
 
 # ------------------------------------------------------------ background tasks

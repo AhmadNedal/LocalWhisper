@@ -172,6 +172,70 @@ export interface CloudProvider {
   key_url: string;
 }
 
+/** Live transcription (microphone / computer audio). */
+export interface LiveStartParams {
+  model: string;
+  language: string | null;
+  device: "auto" | "cpu" | "cuda";
+  preset: "fast" | "balanced" | "accurate";
+  arabic_punctuation: boolean;
+  vocabulary: string;
+  title: string;
+  course: string | null;
+  source: "mic" | "system" | "both";
+  save_recording: boolean;
+  save_to_archive: boolean;
+}
+export interface LiveSnapshot {
+  id: string;
+  status: "loading" | "listening" | "finishing" | "done" | "error" | "cancelled";
+  error: ApiErrorBody | null;
+  device: string | null;
+  model: string;
+  language: string | null;
+  title: string;
+  course: string | null;
+  started_at: number;
+  duration: number;
+  backlog: number;
+  segment_count: number;
+  segments: { id: number; start: number; end: number; text: string }[];
+  recording_path: string | null;
+  archive_id: string | null;
+}
+
+/** Find & replace across a course (or the whole archive). */
+export interface ReplaceParams {
+  find: string;
+  replace: string;
+  /** undefined/null: the whole archive, "": entries without a course. */
+  course?: string | null;
+  exact: boolean;
+  whole_word: boolean;
+  include_summary: boolean;
+}
+export interface ReplaceUndo {
+  label: string;
+  at: number;
+  items: number;
+}
+export interface ReplaceMatch {
+  segment: number;
+  start: number;
+  before: string;
+  match: string;
+  after: string;
+}
+export interface ReplacePreview {
+  find: string;
+  replace: string;
+  total_matches: number;
+  total_items: number;
+  truncated: boolean;
+  undo: ReplaceUndo | null;
+  items: { id: string; title: string; course: string | null; matches: number; summary_matches: number; samples: ReplaceMatch[] }[];
+}
+
 export interface ArchiveSummary {
   id: string;
   title: string;
@@ -622,6 +686,38 @@ export class BackendClient {
   system() {
     return this.request<SystemInfo>("GET", "/system");
   }
+  // ---- Live transcription ----
+  liveStart(params: LiveStartParams) {
+    return this.request<LiveSnapshot>("POST", "/live", params);
+  }
+  liveCurrent() {
+    return this.request<{ session: LiveSnapshot | null }>("GET", "/live/current");
+  }
+  liveState(id: string, since: number) {
+    return this.request<LiveSnapshot>("GET", `/live/${encodeURIComponent(id)}?since=${since}`);
+  }
+  liveStop(id: string) {
+    return this.request<LiveSnapshot>("POST", `/live/${encodeURIComponent(id)}/stop`);
+  }
+  liveCancel(id: string) {
+    return this.request<{ ok: boolean }>("POST", `/live/${encodeURIComponent(id)}/cancel`);
+  }
+  /** Raw 16 kHz mono 16-bit PCM (about one second per call). */
+  async liveAudio(id: string, pcm: Int16Array): Promise<{ ok: boolean; backlog: number; status: string }> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/live/${encodeURIComponent(id)}/audio`, {
+        method: "POST",
+        headers: { "X-Auth-Token": this.token, "Content-Type": "application/octet-stream" },
+        body: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer,
+      });
+    } catch (err) {
+      throw new ApiError("backend_unreachable", err instanceof Error ? err.message : String(err));
+    }
+    const data = (await response.json().catch(() => null)) as { error?: ApiErrorBody; ok?: boolean; backlog?: number; status?: string } | null;
+    if (!response.ok) throw new ApiError(data?.error?.code ?? "internal", data?.error?.detail ?? `HTTP ${response.status}`);
+    return { ok: Boolean(data?.ok), backlog: Number(data?.backlog ?? 0), status: String(data?.status ?? "") };
+  }
   models() {
     return this.request<{ models: ModelInfo[] }>("GET", "/models").then((r) => r.models);
   }
@@ -660,6 +756,19 @@ export class BackendClient {
   }
   archiveRenameCourse(oldName: string, newName: string | null) {
     return this.request<{ changed: number }>("POST", "/archive/courses/rename", { old: oldName, new: newName });
+  }
+  archiveReplacePreview(params: ReplaceParams) {
+    return this.request<ReplacePreview>("POST", "/archive/replace/preview", params);
+  }
+  archiveReplaceApply(params: ReplaceParams & { ids: string[] }) {
+    return this.request<{ changed_items: number; replacements: number; undo: ReplaceUndo | null }>(
+      "POST",
+      "/archive/replace/apply",
+      params,
+    );
+  }
+  archiveReplaceUndo() {
+    return this.request<{ restored_items: number }>("POST", "/archive/replace/undo");
   }
   archiveList(q: string, limit = 50, offset = 0, course?: string | null) {
     const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) });

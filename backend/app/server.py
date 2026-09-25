@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -41,6 +42,7 @@ _STATUS_FOR_CODE = {
     ErrorCode.INVALID_REQUEST: 400,
     ErrorCode.FILE_NOT_FOUND: 404,
     ErrorCode.BUSY: 409,
+    ErrorCode.FREE_LIMIT: 429,
 }
 
 
@@ -61,6 +63,20 @@ class JobBody(BaseModel):
     cloud_model: str | None = None
     api_key: str = Field(default="", max_length=500, repr=False)
     vocabulary: str = Field(default="", max_length=1000)
+
+
+class LiveBody(BaseModel):
+    model: str
+    language: str | None = None
+    device: Literal["auto", "cpu", "cuda"] = "auto"
+    preset: Literal["fast", "balanced", "accurate"] = "balanced"
+    arabic_punctuation: bool = True
+    vocabulary: str = Field(default="", max_length=1000)
+    title: str = Field(default="", max_length=300)
+    course: str | None = Field(default=None, max_length=200)
+    source: Literal["mic", "system", "both"] = "mic"
+    save_recording: bool = True
+    save_to_archive: bool = True
 
 
 class SegmentBody(BaseModel):
@@ -188,6 +204,16 @@ class ArchiveBackupBody(BaseModel):
 
 class ArchiveFileBody(BaseModel):
     path: str = Field(min_length=1, max_length=2000)
+
+
+class ReplaceBody(BaseModel):
+    find: str
+    replace: str = ""
+    course: str | None = None  # None: the whole archive, "": entries without a course
+    exact: bool = False
+    whole_word: bool = False
+    include_summary: bool = True
+    ids: list[str] | None = None  # apply: only these entries
 
 
 class CourseRenameBody(BaseModel):
@@ -384,6 +410,7 @@ def create_app(settings: Settings) -> FastAPI:
     store = ModelStore(settings.models_dir)
     engine = Engine()
     jobs = JobManager(settings, store, engine)
+    from . import find_replace
     from .archive import Archive
 
     archive = Archive(settings.data_dir / "archive.db")
@@ -407,12 +434,16 @@ def create_app(settings: Settings) -> FastAPI:
     from .assistant import AskRequest, AssistantManager
 
     assistant = AssistantManager(archive)
+    from .live import LiveManager, LiveRequest
+
+    live = LiveManager(jobs, archive, settings)
+    jobs.live = live
 
     app = FastAPI(title="Local Transcriber backend", version=__version__, docs_url=None, redoc_url=None)
 
     # Requests the UI polls every second or two: logged only when they fail or are slow.
     quiet_gets = ("/batch", "/watch", "/jobs/", "/health", "/media/stream", "/models", "/system", "/summaries/",
-                  "/translations/", "/burn/", "/assistant/", "/logs")
+                  "/translations/", "/burn/", "/assistant/", "/logs", "/live")
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):  # noqa: ANN001, ANN202
@@ -424,7 +455,9 @@ def create_app(settings: Settings) -> FastAPI:
             raise
         ms = (time.perf_counter() - started) * 1000
         path = request.url.path
-        quiet = request.method in ("GET", "OPTIONS") and path.startswith(quiet_gets)
+        quiet = (request.method in ("GET", "OPTIONS") and path.startswith(quiet_gets)) or (
+            request.method == "POST" and path.startswith("/live/") and path.endswith("/audio")  # ~1 per second
+        )
         if response.status_code >= 500:
             log.error("%s %s -> %d (%.0f ms)", request.method, path, response.status_code, ms)
         elif response.status_code >= 400:
@@ -518,6 +551,34 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/probe")
     def probe_media(body: ProbeBody) -> dict[str, object]:
         return probe(body.path).to_dict()
+
+    # ---- Live transcription (microphone / computer audio) ----
+    @app.post("/live")
+    def live_start(body: LiveBody) -> dict[str, object]:
+        return live.start(LiveRequest(**body.model_dump())).snapshot()
+
+    @app.get("/live/current")
+    def live_current() -> dict[str, object]:
+        s = live.active()
+        return {"session": s.snapshot() if s else None}
+
+    @app.post("/live/{session_id}/audio")
+    async def live_audio(session_id: str, request: Request) -> dict[str, object]:
+        data = await request.body()  # 16 kHz mono 16-bit PCM, little-endian
+        return await run_in_threadpool(live.feed, session_id, data)
+
+    @app.get("/live/{session_id}")
+    def live_state(session_id: str, since: int = 0) -> dict[str, object]:
+        return live.get(session_id).snapshot(since)
+
+    @app.post("/live/{session_id}/stop")
+    def live_stop(session_id: str) -> dict[str, object]:
+        return live.stop(session_id).snapshot()
+
+    @app.post("/live/{session_id}/cancel")
+    def live_cancel(session_id: str) -> dict[str, bool]:
+        live.cancel(session_id)
+        return {"ok": True}
 
     @app.post("/jobs")
     def start_job(body: JobBody) -> dict[str, object]:
@@ -637,6 +698,34 @@ def create_app(settings: Settings) -> FastAPI:
         overrides = {".mkv": "video/x-matroska", ".m4a": "audio/mp4", ".opus": "audio/ogg", ".oga": "audio/ogg", ".m4v": "video/mp4"}
         mime = overrides.get(target.suffix.lower()) or mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return FileResponse(target, media_type=mime, headers={"Cache-Control": "no-store"})
+
+    @app.post("/archive/replace/preview")
+    def archive_replace_preview(body: ReplaceBody) -> dict[str, object]:
+        res = find_replace.preview(
+            archive, body.find, body.replace, body.course, body.exact, body.whole_word, body.include_summary
+        )
+        res["undo"] = find_replace.undo_state(archive)
+        return res
+
+    @app.post("/archive/replace/apply")
+    def archive_replace_apply(body: ReplaceBody) -> dict[str, object]:
+        if body.ids is None:
+            raise AppError(ErrorCode.INVALID_REQUEST, "Choose the entries to change")
+        res = find_replace.apply(
+            archive, body.find, body.replace, body.ids, body.course, body.exact, body.whole_word, body.include_summary
+        )
+        log.info("Find & replace: %s replacement(s) in %s entr(ies)", res["replacements"], res["changed_items"])
+        return res
+
+    @app.get("/archive/replace/undo")
+    def archive_replace_undo_state() -> dict[str, object]:
+        return {"undo": find_replace.undo_state(archive)}
+
+    @app.post("/archive/replace/undo")
+    def archive_replace_undo() -> dict[str, object]:
+        res = find_replace.undo(archive)
+        log.info("Find & replace undone: %s entr(ies) restored", res["restored_items"])
+        return res
 
     @app.get("/archive/stats")
     def archive_stats(months: int = 12) -> dict[str, object]:

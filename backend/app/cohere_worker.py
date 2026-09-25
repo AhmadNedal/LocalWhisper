@@ -17,12 +17,14 @@ Why a separate process: it keeps the model's ~1.8 GB out of the main backend
 (given back as soon as a transcription ends) and a crash here can't take the
 backend down.
 
-Protocol (UTF-8 JSON lines):
-  stdin  ← {"model_dir", "pcm", "language", "threads", "chunks": [[start, end], …]}
-           (sample indices into the 16 kHz mono int16 PCM file)
-  stdout → {"event": "ready"} once the model is loaded,
-           {"event": "chunk", "i": <index>, "text": "…"} per chunk (in order),
-           {"event": "done"}  or  {"event": "error", "detail": "…"}
+Protocol (UTF-8 JSON lines). The worker stays alive and serves many requests:
+  stdin  ← {"model_dir", "threads"}                   (first line: load the model)
+  stdout → {"event": "ready"}                         (or {"event": "error", …} and exit)
+  stdin  ← {"cmd": "transcribe", "pcm", "language", "chunks": [[start, end], …]}
+           (sample indices into a 16 kHz mono int16 PCM file)
+  stdout → {"event": "chunk", "i": <index>, "text": "…"} per chunk (in order),
+           then {"event": "done"}  or  {"event": "error", "detail": "…"}
+  stdin  ← {"cmd": "quit"}                            (or stdin closed)
 
 Started as ``python -m app.cohere_worker`` (development) or
 ``transcriber-backend.exe --cohere-worker`` (installed app).
@@ -173,24 +175,36 @@ def run() -> int:
         except (AttributeError, ValueError):
             pass
     try:
-        req = json.loads(sys.stdin.readline())
+        init = json.loads(sys.stdin.readline())
         import numpy as np
 
-        model = CohereModel(Path(req["model_dir"]), int(req.get("threads") or 4))
-        _send({"event": "ready"})
-
-        pcm_path = Path(req["pcm"])
-        size = pcm_path.stat().st_size // 2
-        pcm = np.memmap(pcm_path, dtype=np.int16, mode="r", shape=(size,))
-        language = req.get("language") or "ar"
-        for i, (start, end) in enumerate(req.get("chunks") or []):
-            samples = np.asarray(pcm[int(start) : int(end)], dtype=np.float32) / 32768.0
-            _send({"event": "chunk", "i": i, "text": model.transcribe(samples, language)})
-        _send({"event": "done"})
-        return 0
+        model = CohereModel(Path(init["model_dir"]), int(init.get("threads") or 4))
     except Exception as exc:  # noqa: BLE001 - reported to the parent
         _send({"event": "error", "detail": f"{exc.__class__.__name__}: {exc}"[:500]})
         return 1
+    _send({"event": "ready"})
+
+    # Then any number of requests, until "quit" or the parent closes stdin.
+    for line in sys.stdin:
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        if req.get("cmd") == "quit":
+            break
+        try:
+            pcm_path = Path(req["pcm"])
+            size = pcm_path.stat().st_size // 2
+            pcm = np.memmap(pcm_path, dtype=np.int16, mode="r", shape=(size,))
+            language = req.get("language") or "ar"
+            for i, (start, end) in enumerate(req.get("chunks") or []):
+                samples = np.asarray(pcm[int(start) : int(end)], dtype=np.float32) / 32768.0
+                _send({"event": "chunk", "i": i, "text": model.transcribe(samples, language)})
+            del pcm
+            _send({"event": "done"})
+        except Exception as exc:  # noqa: BLE001 - this request failed; the model stays loaded
+            _send({"event": "error", "detail": f"{exc.__class__.__name__}: {exc}"[:500]})
+    return 0
 
 
 if __name__ == "__main__":

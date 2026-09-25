@@ -121,6 +121,21 @@ export const ArrowDownIcon = (p: IconProps) => (
     <path d="M12 5v14M6 13l6 6 6-6" />
   </Icon>
 );
+export const MicIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+    <path d="M12 17.5V21" />
+  </Icon>
+);
+export const ReplaceIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 7h11" />
+    <path d="m12 4 3 3-3 3" />
+    <path d="M20 17H9" />
+    <path d="m12 14-3 3 3 3" />
+  </Icon>
+);
 export const RefreshIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M20 11a8 8 0 1 0-2.3 5.7" />

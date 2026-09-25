@@ -125,12 +125,110 @@ def _worker_command() -> tuple[list[str], str | None]:
     return [sys.executable, "-m", "app.cohere_worker"], str(Path(__file__).resolve().parent.parent)
 
 
+IDLE_SECONDS = 10 * 60  # a worker with nothing to do is stopped (frees ~2.4 GB)
+
+
+class _Worker:
+    """One running worker process with the model loaded."""
+
+    def __init__(self, model_path: Path) -> None:
+        self.model_path = model_path
+        cmd, cwd = _worker_command()
+        self.threads = psutil.cpu_count(logical=False) or psutil.cpu_count() or 4
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+        self.proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=flags,
+        )
+        self.stderr_tail: list[str] = []
+        threading.Thread(target=self._pump_stderr, daemon=True, name="cohere-stderr").start()
+        self._send({"model_dir": str(model_path), "threads": self.threads})
+        msg = self._read()
+        if msg.get("event") != "ready":
+            self.kill()
+            raise self._error(msg)
+        log.info("Cohere worker: model loaded (%d threads)", self.threads)
+
+    def _pump_stderr(self) -> None:
+        assert self.proc.stderr is not None
+        for line in self.proc.stderr:
+            line = line.rstrip()
+            if line:
+                self.stderr_tail.append(line)
+                del self.stderr_tail[:-20]
+                log.warning("Cohere worker: %s", line)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def _send(self, obj: dict) -> None:
+        assert self.proc.stdin is not None
+        self.proc.stdin.write(json.dumps(obj) + "\n")
+        self.proc.stdin.flush()
+
+    def _read(self) -> dict:
+        assert self.proc.stdout is not None
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:  # the process ended
+                detail = " | ".join(self.stderr_tail[-3:]) or f"exit code {self.proc.poll()}"
+                return {"event": "error", "detail": f"Cohere worker stopped: {detail}"}
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+
+    @staticmethod
+    def _error(msg: dict) -> AppError:
+        from .errors import classify_exception
+
+        err = classify_exception(RuntimeError(str(msg.get("detail") or "Cohere worker failed")))
+        if err.code == ErrorCode.TRANSCRIPTION_FAILED:
+            err = AppError(ErrorCode.MODEL_LOAD_FAILED, err.detail)
+        return err
+
+    def run(self, pcm: Path, language: str, chunks: list[list[int]], on_chunk: Callable[[int, str], None]) -> None:
+        self._send({"cmd": "transcribe", "pcm": str(pcm), "language": language, "chunks": chunks})
+        while True:
+            msg = self._read()
+            event = msg.get("event")
+            if event == "chunk":
+                on_chunk(int(msg["i"]), str(msg.get("text") or ""))
+            elif event == "done":
+                return
+            elif event == "error":
+                raise self._error(msg)
+
+    def kill(self) -> None:
+        if self.proc.poll() is None:
+            try:
+                self._send({"cmd": "quit"})
+                self.proc.wait(timeout=3)
+            except Exception:  # noqa: BLE001
+                pass
+        if self.proc.poll() is None:
+            self.proc.kill()
+
+
 class CohereEngine:
-    """Runs Cohere Transcribe Arabic in a worker process, one transcription at a time."""
+    """Runs Cohere Transcribe Arabic in a worker process that stays loaded between files.
+
+    The first transcription starts the worker (loading the model takes ~10–40 s);
+    the next files in a queue or from a watched folder reuse it. It is stopped
+    after IDLE_SECONDS without work, when a Whisper model is loaded instead, or
+    when a transcription is cancelled.
+    """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()  # one transcription at a time
+        self._worker: _Worker | None = None
+        self._idle: threading.Timer | None = None
 
     def load(self, model_path: Path, language: str) -> Path:
         """Checks the files and installs the repaired graphs; the model is loaded inside the worker."""
@@ -139,11 +237,84 @@ class CohereEngine:
         ensure_patched(model_path)
         return model_path
 
+    def loaded(self) -> bool:
+        w = self._worker
+        return w is not None and w.alive()
+
     def unload(self) -> None:
+        self._cancel_idle()
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            log.info("Cohere worker stopped (memory freed)")
+            worker.kill()
+
+    def _cancel_idle(self) -> None:
+        if self._idle is not None:
+            self._idle.cancel()
+            self._idle = None
+
+    def _arm_idle(self) -> None:
+        self._cancel_idle()
+        self._idle = threading.Timer(IDLE_SECONDS, self._idle_stop)
+        self._idle.daemon = True
+        self._idle.start()
+
+    def _idle_stop(self) -> None:
+        if self._lock.acquire(blocking=False):
+            try:
+                if self._worker is not None:
+                    log.info("Cohere worker idle for %d min", IDLE_SECONDS // 60)
+                    self.unload()
+            finally:
+                self._lock.release()
+
+    def _get_worker(self, model_path: Path) -> _Worker:
+        w = self._worker
+        if w is not None and w.alive() and w.model_path == model_path:
+            return w
+        self.unload()
+        self._worker = _Worker(model_path)
+        return self._worker
+
+    def run_chunks(
+        self,
+        model_path: Path,
+        pcm: Path,
+        language: str,
+        chunks: list[list[int]],
+        on_chunk: Callable[[int, str], None],
+        cancel: threading.Event | None = None,
+    ) -> None:
+        """Transcribe sample ranges of a 16 kHz int16 PCM file (used by files and live mode)."""
         with self._lock:
-            proc, self._proc = self._proc, None
-        if proc is not None and proc.poll() is None:
-            proc.kill()
+            self._cancel_idle()
+            worker = self._get_worker(model_path)
+            stop = threading.Event()
+
+            def watch() -> None:
+                while not stop.wait(0.3):
+                    if cancel is not None and cancel.is_set():
+                        worker.proc.kill()  # the only way to interrupt the model mid-chunk
+                        return
+
+            threading.Thread(target=watch, daemon=True, name="cohere-cancel").start()
+            try:
+                worker.run(pcm, language, chunks, on_chunk)
+            except AppError:
+                if cancel is not None and cancel.is_set():
+                    raise Cancelled() from None
+                if not worker.alive():
+                    self._worker = None
+                raise
+            finally:
+                stop.set()
+                if cancel is not None and cancel.is_set():
+                    self._worker = None
+                    worker.kill()
+                if self._worker is not None:
+                    self._arm_idle()
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
 
     def transcribe(
         self,
@@ -175,115 +346,28 @@ class CohereEngine:
         if not chunks:
             raise AppError(ErrorCode.NO_SPEECH, "No speech was detected in the audio")
 
-        # 2. Transcribe the chunks in the worker process
-        cmd, cwd = _worker_command()
-        threads = psutil.cpu_count(logical=False) or psutil.cpu_count() or 4
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=flags,
-        )
-        with self._lock:
-            self._proc = proc
-        stderr_tail: list[str] = []
-
-        def pump_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                line = line.rstrip()
-                if line:
-                    stderr_tail.append(line)
-                    del stderr_tail[:-20]
-                    log.warning("Cohere worker: %s", line)
-
-        threading.Thread(target=pump_stderr, daemon=True, name="cohere-stderr").start()
-        stop_watch = threading.Event()
-
-        def watch_cancel() -> None:
-            while not stop_watch.wait(0.3):
-                if cancel.is_set() and proc.poll() is None:
-                    proc.kill()
-                    return
-
-        threading.Thread(target=watch_cancel, daemon=True, name="cohere-cancel").start()
-
+        # 2. Transcribe them in the (kept-loaded) worker
         segments: list[TranscriptSegment] = []
         recent: list[str] = []
-        try:
-            assert proc.stdin is not None and proc.stdout is not None
-            proc.stdin.write(
-                json.dumps(
-                    {
-                        "model_dir": str(model_path),
-                        "pcm": str(audio.path),
-                        "language": language,
-                        "threads": threads,
-                        "chunks": [[c.start, c.end] for c in chunks],
-                    }
-                )
-                + "\n"
+
+        def on_chunk(i: int, text: str) -> None:
+            nonlocal recent
+            chunk = chunks[i]
+            text = clean_text(text)
+            # Skip empty chunks and repetition loops (the same line 3+ times in a row).
+            if not text or (len(recent) >= 2 and recent[-1] == text and recent[-2] == text):
+                return
+            recent = (recent + [text])[-2:]
+            item = TranscriptSegment(
+                id=len(segments),
+                start=round(chunk.start / SAMPLE_RATE, 2),
+                end=round(chunk.end / SAMPLE_RATE, 2),
+                text=text,
             )
-            proc.stdin.flush()
-            finished = False
-            for line in proc.stdout:
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                event = msg.get("event")
-                if event == "ready":
-                    log.info("Cohere worker: model loaded (%d threads)", threads)
-                elif event == "chunk":
-                    chunk = chunks[int(msg["i"])]
-                    text = clean_text(str(msg.get("text") or ""))
-                    # Skip empty chunks and repetition loops (the same line 3+ times in a row).
-                    if not text or (len(recent) >= 2 and recent[-1] == text and recent[-2] == text):
-                        continue
-                    recent = (recent + [text])[-2:]
-                    item = TranscriptSegment(
-                        id=len(segments),
-                        start=round(chunk.start / SAMPLE_RATE, 2),
-                        end=round(chunk.end / SAMPLE_RATE, 2),
-                        text=text,
-                    )
-                    segments.append(item)
-                    on_segment(item, min(1.0, chunk.end / total))
-                elif event == "error":
-                    from .errors import classify_exception
+            segments.append(item)
+            on_segment(item, min(1.0, chunk.end / total))
 
-                    err = classify_exception(RuntimeError(str(msg.get("detail") or "")))
-                    if err.code == ErrorCode.TRANSCRIPTION_FAILED:
-                        err = AppError(ErrorCode.MODEL_LOAD_FAILED, err.detail)
-                    raise err
-                elif event == "done":
-                    finished = True
-                    break
-            if cancel.is_set():
-                raise Cancelled()
-            if not finished:
-                code = proc.wait(timeout=10)
-                detail = " | ".join(stderr_tail[-3:]) or f"exit code {code}"
-                from .errors import classify_exception
-
-                raise classify_exception(RuntimeError(f"Cohere worker stopped: {detail}"))
-        finally:
-            stop_watch.set()
-            if proc.poll() is None:
-                try:
-                    proc.stdin.close()  # type: ignore[union-attr]
-                    proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001
-                    proc.kill()
-            with self._lock:
-                if self._proc is proc:
-                    self._proc = None
-
+        self.run_chunks(model_path, audio.path, language, [[c.start, c.end] for c in chunks], on_chunk, cancel)
         if not segments:
             raise AppError(ErrorCode.NO_SPEECH, "No speech was detected in the audio")
         log.info("Cohere: %d segments", len(segments))

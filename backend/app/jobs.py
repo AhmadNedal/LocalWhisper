@@ -156,6 +156,7 @@ class JobManager:
         self.cohere = CohereEngine()  # Cohere Transcribe Arabic (sherpa-onnx), loaded only when chosen
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        self.live = None  # LiveManager: a live session and a file job never run at once
 
     def get(self, job_id: str) -> Job:
         job = self._jobs.get(job_id)
@@ -163,10 +164,15 @@ class JobManager:
             raise AppError(ErrorCode.INVALID_REQUEST, "Unknown job")
         return job
 
+    def running(self) -> bool:
+        return any(j.status == "running" for j in self._jobs.values())
+
     def start(self, request: JobRequest) -> Job:
         with self._lock:
             if any(j.status == "running" for j in self._jobs.values()):
                 raise AppError(ErrorCode.BUSY, "A transcription is already running")
+            if self.live is not None and self.live.active() is not None:
+                raise AppError(ErrorCode.BUSY, "Live transcription is running")
             if request.engine == "cloud":
                 from .cloud import validate_request
 
@@ -216,6 +222,24 @@ class JobManager:
             log.info("Job %s: stage %s -> %s%s", job.id[:8], stage_before, stage_after, detail)
         elif detail:
             log.info("Job %s: running%s", job.id[:8], detail)
+
+    def device_for(self, spec, requested: str) -> tuple[str, str]:  # noqa: ANN001
+        """(device, compute_type) for a model outside a job (live mode); no warnings."""
+        if not spec.gpu:
+            return "cpu", "int8"
+        device, compute_type = resolve_device(requested)
+        if device == "cuda" and not gpu_fits(spec.vram_gpu_mb, compute_type):
+            if requested == "auto":
+                return "cpu", "int8"
+            raise AppError(
+                ErrorCode.INSUFFICIENT_MEMORY,
+                f"Model '{spec.id}' needs about {spec.vram_gpu_mb / 1024:.1f} GB of GPU memory ({compute_type})",
+            )
+        return device, compute_type
+
+    def load_model(self, spec, device: str, compute_type: str, language: str | None):  # noqa: ANN001, ANN201
+        """Public entry to the shared model (live mode): the same instance jobs use."""
+        return self._load(spec, device, compute_type, language)
 
     def _resolve_device(self, job: Job) -> tuple[str, str]:
         req = job.request

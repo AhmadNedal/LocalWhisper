@@ -43,6 +43,9 @@ class ModelSpec:
     languages: tuple[str, ...] = ()  # supported languages; empty = all Whisper languages
     gpu: bool = True  # False: always runs on the CPU
     experimental: bool = False
+    # Fallback sources when the Hugging Face repo fails (deleted, blocked, offline):
+    # base URLs that serve each file by its name, e.g. a GitHub Release.
+    mirrors: tuple[str, ...] = ()
 
     @property
     def patterns(self) -> list[str]:
@@ -84,6 +87,9 @@ CATALOG: dict[str, ModelSpec] = {
             languages=("ar", "en"),
             gpu=False,
             experimental=True,
+            # The project's own copy (a GitHub Release with the same 5 files), so the
+            # model keeps downloading even if the Hugging Face repo above disappears.
+            mirrors=("https://github.com/AhmadNedal/LocalWhisper/releases/download/cohere-arabic-model/",),
         ),
     )
 }
@@ -179,7 +185,7 @@ class ModelStore:
             self._downloads[model_id] = state
             thread = threading.Thread(
                 target=self._download,
-                args=(spec.repo, self.path_for(spec.id), spec.patterns, state, spec.required),
+                args=(spec.repo, self.path_for(spec.id), spec.patterns, state, spec.required, spec.mirrors),
                 daemon=True,
                 name=f"dl-{model_id}",
             )
@@ -252,7 +258,13 @@ class ModelStore:
             self._downloads.pop(f"extra:{key}", None)
 
     def _download(
-        self, repo: str, target: Path, patterns: list[str], state: DownloadState, required: str = "model.bin"
+        self,
+        repo: str,
+        target: Path,
+        patterns: list[str],
+        state: DownloadState,
+        required: str = "model.bin",
+        mirrors: tuple[str, ...] = (),
     ) -> None:
         from faster_whisper.utils import disabled_tqdm
         from huggingface_hub import HfApi, snapshot_download
@@ -283,12 +295,20 @@ class ModelStore:
         poller = threading.Thread(target=poll, daemon=True)
         poller.start()
         try:
-            snapshot_download(
-                repo,
-                local_dir=str(target),
-                allow_patterns=patterns,
-                tqdm_class=disabled_tqdm,  # progress comes from the poller above
-            )
+            try:
+                snapshot_download(
+                    repo,
+                    local_dir=str(target),
+                    allow_patterns=patterns,
+                    tqdm_class=disabled_tqdm,  # progress comes from the poller above
+                )
+                if not (target / required).is_file():
+                    raise RuntimeError(f"{required} missing after download")
+            except Exception as hub_error:  # noqa: BLE001
+                if not mirrors:
+                    raise
+                log.warning("Hugging Face download of %s failed (%s); trying the mirrors", repo, hub_error)
+                self._download_from_mirrors(mirrors, target, patterns, hub_error)
             if not (target / required).is_file():
                 raise RuntimeError(f"{required} missing after download")
             (target / _MARKER).write_text(
@@ -308,6 +328,40 @@ class ModelStore:
                 ).to_dict()
         finally:
             stop_polling.set()
+
+    @staticmethod
+    def _download_from_mirrors(mirrors: tuple[str, ...], target: Path, files: list[str], first_error: Exception) -> None:
+        """Fetch every file from the first mirror that has them all (``<base><file name>``)."""
+        import urllib.request
+
+        errors = [f"Hugging Face: {first_error}"]
+        for base in mirrors:
+            try:
+                for rel in files:
+                    dest = target / rel
+                    url = base + Path(rel).name
+                    req = urllib.request.Request(url, headers={"User-Agent": "LocalTranscriber"})
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        size = int(resp.headers.get("Content-Length") or 0)
+                        if dest.is_file() and size and dest.stat().st_size == size:
+                            continue  # already here from an earlier attempt
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        part = dest.with_name(dest.name + ".part")
+                        with open(part, "wb") as out:
+                            while True:
+                                block = resp.read(1 << 20)
+                                if not block:
+                                    break
+                                out.write(block)
+                        if size and part.stat().st_size != size:
+                            raise RuntimeError(f"{rel}: incomplete ({part.stat().st_size} of {size} bytes)")
+                        part.replace(dest)
+                log.info("Model downloaded from mirror %s", base)
+                return
+            except Exception as exc:  # noqa: BLE001 - try the next mirror
+                log.warning("Mirror %s failed: %s", base, exc)
+                errors.append(f"{base}: {exc}")
+        raise RuntimeError(" | ".join(errors)[:280])
 
     def delete(self, model_id: str) -> None:
         self.spec(model_id)

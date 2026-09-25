@@ -26,6 +26,8 @@ const START_TIMEOUT_MS = 90_000; // first start can be slow (antivirus scans the
 class BackendProcess extends EventEmitter {
   constructor() {
     super();
+    /** Account server base URL for the free AI relay (set by main.js before start). */
+    this.aiProxy = "";
     this.token = crypto.randomBytes(32).toString("hex");
     /** @type {import("node:child_process").ChildProcess | null} */
     this.child = null;
@@ -130,6 +132,8 @@ class BackendProcess extends EventEmitter {
           TRANSCRIBER_OUTPUT_DIR: this.outputDir(),
           TRANSCRIBER_DATA_DIR: app.getPath("userData"), // archive.db lives here
           FFMPEG_PATH: this.resolveFfmpeg(),
+          // Account server that relays the free AI (summaries, translation, Groq cloud transcription).
+          TRANSCRIBER_AI_PROXY: this.aiProxy || "",
         },
       });
       this.child = child;
@@ -226,6 +230,34 @@ class BackendProcess extends EventEmitter {
     this.restarts = 0;
     await new Promise((r) => setTimeout(r, 500));
     return this.start();
+  }
+
+  /**
+   * Stop the engine and wait until it (and the processes it started, such as the
+   * Cohere worker) has exited — e.g. before an update replaces its files.
+   * @param {number} [timeoutMs]
+   * @returns {Promise<void>}
+   */
+  stopAndWait(timeoutMs = 8000) {
+    const child = this.child;
+    this.stopping = true;
+    this.readyPromise = null;
+    this.child = null;
+    if (!child || child.exitCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        setTimeout(resolve, 300);
+      };
+      const timer = setTimeout(resolve, timeoutMs);
+      child.once("exit", done);
+      if (process.platform === "win32" && child.pid) {
+        // Kill the whole process tree (the engine and its worker processes).
+        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => child.kill());
+      } else {
+        child.kill();
+      }
+    });
   }
 
   stop() {

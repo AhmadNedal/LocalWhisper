@@ -24,6 +24,8 @@ const DEFAULTS = {
   loginUrl: "",
   registerUrl: "",
   sendCodeUrl: "",
+  resetCodeUrl: "",
+  resetUrl: "",
   meUrl: "",
   optionsUrl: "",
   usernameField: "email",
@@ -104,6 +106,8 @@ class AuthGate {
     cfg.loginUrl = cfg.loginUrl || `${base}/api/auth/login`;
     cfg.registerUrl = cfg.registerUrl || `${base}/api/auth/register`;
     cfg.sendCodeUrl = cfg.sendCodeUrl || `${base}/api/auth/register/send-code`;
+    cfg.resetCodeUrl = cfg.resetCodeUrl || `${base}/api/auth/password/send-code`;
+    cfg.resetUrl = cfg.resetUrl || `${base}/api/auth/password/reset`;
     cfg.meUrl = cfg.meUrl || `${base}/api/auth/me`;
     cfg.optionsUrl = cfg.optionsUrl || `${base}/api/auth/options`;
     // An installed copy can't be unlocked by editing its resources.
@@ -303,6 +307,48 @@ class AuthGate {
     return AuthGate.failure(r);
   }
 
+  /**
+   * Forgot password step 1: e-mail a reset code (the service answers the same
+   * whether or not the address has an account).
+   * @param {any} d
+   * @returns {Promise<{ ok: true, expiresInSeconds: number, resendAfterSeconds: number } | { ok: false, code: string, status?: number, message?: string, retryAfter?: number }>}
+   */
+  async sendResetCode(d) {
+    const email = String(d?.email || "").trim();
+    if (!email) return { ok: false, code: "missing" };
+    const lang = d.lang === "en" ? "en" : "ar";
+    const r = await this.post(this.config.resetCodeUrl, { email, lang });
+    if (r.status >= 200 && r.status < 300 && "body" in r) {
+      return {
+        ok: true,
+        expiresInSeconds: Number(r.body?.expiresInSeconds) || 0,
+        resendAfterSeconds: Number(r.body?.resendAfterSeconds) || 60,
+      };
+    }
+    if (r.status === 404) return { ok: false, code: "reset_unsupported", status: 404 };
+    return AuthGate.failure(r);
+  }
+
+  /**
+   * Forgot password step 2: the code and a new password; signs in on success
+   * (the service signs every other device out).
+   * @param {any} d
+   * @returns {Promise<{ ok: true, user: { email: string, name: string } } | { ok: false, code: string, status?: number, message?: string, retryAfter?: number }>}
+   */
+  async resetPassword(d) {
+    const email = String(d?.email || "").trim();
+    const code = String(d?.code || "").replace(/\D/g, "");
+    const newPassword = String(d?.password || "");
+    if (!email || !newPassword) return { ok: false, code: "missing" };
+    if (!code) return { ok: false, code: "code_required" };
+    const r = await this.post(this.config.resetUrl, { email, code, newPassword });
+    if (r.status >= 200 && r.status < 300 && "body" in r) {
+      const user = this.accept(email, r.body, Boolean(d.remember));
+      return user ? { ok: true, user } : { ok: false, code: "server", status: r.status };
+    }
+    return AuthGate.failure(r);
+  }
+
   /** Whether the service allows creating accounts (and its password rule). */
   async options() {
     const controller = new AbortController();
@@ -317,6 +363,7 @@ class AuthGate {
         // An older service without the setting doesn't send codes.
         requireEmailVerification: body.requireEmailVerification === true,
         resendSeconds: Number(body.resendSeconds) || 60,
+        passwordReset: body.passwordReset === true,
         reachable: true,
       };
     } catch {

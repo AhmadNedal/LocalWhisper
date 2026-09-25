@@ -9,7 +9,8 @@ import { FileName } from "./FileName";
 import { CourseToolsDialog, type CourseToolMode } from "./CourseToolsDialog";
 import { StatsDialog } from "./StatsDialog";
 import { AskDialog } from "./AskDialog";
-import { AlertIcon, ArchiveIcon, ChartIcon, QuestionIcon, CheckIcon, CloudIcon, DatabaseIcon, DownloadIcon, UploadIcon, FileMediaIcon, FolderIcon, SearchIcon, TrashIcon, YoutubeIcon } from "./Icons";
+import { ReplaceDialog } from "./ReplaceDialog";
+import { AlertIcon, ArchiveIcon, ChartIcon, QuestionIcon, CheckIcon, CloudIcon, DatabaseIcon, DownloadIcon, UploadIcon, FileMediaIcon, FolderIcon, ReplaceIcon, SearchIcon, TrashIcon, YoutubeIcon } from "./Icons";
 
 interface Props {
   t: Strings;
@@ -20,6 +21,8 @@ interface Props {
   /** Open an entry and jump to a time (answers of "Ask the course"). */
   onOpenAt?: (id: string, time: number) => void;
   onDeleted: (id: string) => void;
+  /** Find & replace changed these entries ("*": maybe any). */
+  onEdited?: (ids: string[]) => void;
   onClose: () => void;
 }
 
@@ -30,7 +33,7 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onDeleted, onClose }: Props) {
+export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onDeleted, onEdited, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<ArchiveSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -48,6 +51,7 @@ export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onD
   const [courseTool, setCourseTool] = useState<CourseToolMode | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState<"backup" | "restore" | null>(null);
   const [backupResult, setBackupResult] = useState<{ text: string; path?: string } | null>(null);
 
@@ -64,7 +68,7 @@ export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onD
   }, [loadCourses]);
 
   const statsRef = useRef(false);
-  statsRef.current = statsOpen || askOpen;
+  statsRef.current = statsOpen || askOpen || replaceOpen;
   const courseToolRef = useRef(courseTool);
   courseToolRef.current = courseTool;
 
@@ -198,6 +202,9 @@ export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onD
             <p className="hint">{t.archiveHint}</p>
           </div>
           <div className="archive-head-actions">
+            <button className="btn btn-small" onClick={() => setReplaceOpen(true)} title={t.replaceHint}>
+              <ReplaceIcon size={14} /> {t.replaceButton}
+            </button>
             <button className="btn btn-small" onClick={() => setStatsOpen(true)}>
               <ChartIcon size={14} /> {t.statsButton}
             </button>
@@ -421,6 +428,19 @@ export function ArchiveDialog({ t, lang, client, activeId, onOpen, onOpenAt, onD
           ) : null}
           {askOpen && course && onOpenAt ? (
             <AskDialog t={t} lang={lang} client={client} course={course} onOpenAt={onOpenAt} onClose={() => setAskOpen(false)} />
+          ) : null}
+          {replaceOpen ? (
+            <ReplaceDialog
+              t={t}
+              lang={lang}
+              client={client}
+              course={course}
+              onChanged={(ids) => {
+                load(query, 0);
+                onEdited?.(ids);
+              }}
+              onClose={() => setReplaceOpen(false)}
+            />
           ) : null}
           {statsOpen ? (
             <StatsDialog

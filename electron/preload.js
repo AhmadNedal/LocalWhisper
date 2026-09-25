@@ -21,6 +21,23 @@ contextBridge.exposeInMainWorld("desktop", {
   authSendCode: (details) => ipcRenderer.invoke("auth:sendCode", details),
   /** Registration step 2: create the account with the code. @param {object} details */
   authRegister: (details) => ipcRenderer.invoke("auth:register", details),
+  /** Forgot password: e-mail a reset code. @param {{ email: string, lang?: string }} details */
+  /** Live transcription: allow the next getDisplayMedia() to capture computer audio (Windows). */
+  liveSystemAudio: () => ipcRenderer.invoke("live:prepareSystemAudio"),
+  /** Automatic updates (installed app): state, "check now", "restart to update". */
+  updateGet: () => ipcRenderer.invoke("update:get"),
+  updateCheck: () => ipcRenderer.invoke("update:check"),
+  updateInstall: () => ipcRenderer.invoke("update:install"),
+  /** @param {(state: any) => void} callback */
+  onUpdateState: (callback) => {
+    /** @param {any} _event @param {any} state */
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("update:state", listener);
+    return () => ipcRenderer.removeListener("update:state", listener);
+  },
+  authSendResetCode: (details) => ipcRenderer.invoke("auth:sendResetCode", details),
+  /** Forgot password: code + new password → signed in. @param {{ email: string, code: string, password: string, remember?: boolean }} details */
+  authResetPassword: (details) => ipcRenderer.invoke("auth:resetPassword", details),
   restartBackend: () => ipcRenderer.invoke("backend:restart"),
   /** Keep running in the tray after the window is closed (while folders are watched). @param {object} opts */
   setBackground: (opts) => ipcRenderer.invoke("app:setBackground", opts),

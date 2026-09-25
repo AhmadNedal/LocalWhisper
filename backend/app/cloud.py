@@ -28,6 +28,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from . import ai_proxy
 from .errors import AppError, Cancelled, ErrorCode
 from .media import SAMPLE_RATE, PcmAudio
 from .transcriber import TranscriptSegment, _is_hallucination, clean_text
@@ -241,14 +242,15 @@ def _post_chunk(
         data["response_format"] = "verbose_json" if verbose else "json"
         if vocabulary:
             data["prompt"] = vocabulary  # OpenAI / Groq: spelling hints for names and terms
+    url, headers = ai_proxy.bearer(prov.url, api_key)
     delay = 1.5
     for attempt in range(MAX_RETRIES + 1):
         if cancel.is_set():
             raise Cancelled()
         try:
             resp = client.post(
-                prov.url,
-                headers={"Authorization": f"Bearer {api_key}"},
+                url,
+                headers=headers,
                 data=data,
                 files={"file": ("chunk.wav", wav, "audio/wav")},
                 timeout=REQUEST_TIMEOUT,
@@ -274,8 +276,10 @@ def _post_chunk(
             return str(payload.get("text") or "").strip()
 
         retryable = resp.status_code == 429 or resp.status_code >= 500
-        err = _error_from_response(resp.status_code, resp.text)
-        if retryable and err.code != ErrorCode.CLOUD_QUOTA and attempt < MAX_RETRIES:
+        err = (ai_proxy.is_proxy(api_key) and ai_proxy.error(resp.status_code, resp.text)) or _error_from_response(
+            resp.status_code, resp.text
+        )
+        if retryable and err.code not in (ErrorCode.CLOUD_QUOTA, ErrorCode.FREE_LIMIT, ErrorCode.FREE_AI_UNAVAILABLE) and attempt < MAX_RETRIES:
             retry_after = resp.headers.get("retry-after")
             wait_s = float(retry_after) if retry_after and retry_after.replace(".", "").isdigit() else delay
             time.sleep(min(wait_s, 30) + random.random())
@@ -400,9 +404,12 @@ def test_key(provider_id: str, api_key: str) -> dict[str, Any]:
     if not api_key.strip():
         raise AppError(ErrorCode.CLOUD_AUTH, "No API key")
     try:
-        resp = httpx.get(prov.check_url, headers={"Authorization": f"Bearer {api_key.strip()}"}, timeout=20)
+        url, headers = ai_proxy.bearer(prov.check_url, api_key)
+        resp = httpx.get(url, headers=headers, timeout=20)
     except httpx.HTTPError as exc:
         raise AppError(ErrorCode.CLOUD_NETWORK, f"{exc.__class__.__name__}: {exc}"[:300]) from exc
     if resp.status_code == 200:
         return {"ok": True, "provider": prov.name}
-    raise _error_from_response(resp.status_code, resp.text)
+    raise (ai_proxy.is_proxy(api_key) and ai_proxy.error(resp.status_code, resp.text)) or _error_from_response(
+        resp.status_code, resp.text
+    )

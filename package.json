@@ -23,8 +23,8 @@
     "build:backend": "node scripts/build-backend.mjs",
     "build": "npm run build:ui && npm run build:backend",
     "start": "electron .",
-    "pack": "npm run build && electron-builder --win --dir",
-    "dist": "npm run build && electron-builder --win",
+    "pack": "node scripts/ensure-deps.mjs && npm run build && electron-builder --win --dir",
+    "dist": "node scripts/ensure-deps.mjs && npm run build && electron-builder --win --publish never",
     "doctor": "node scripts/doctor.mjs",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
     "lint": "npm run typecheck"
@@ -53,8 +53,7 @@
       "electron/**/*",
       "frontend/out/**/*",
       "build/icon.png",
-      "package.json",
-      "!**/node_modules/**/*"
+      "package.json"
     ],
     "extraResources": [
       {
@@ -78,7 +77,6 @@
         "from": ".",
         "to": ".",
         "filter": [
-          "builtin-keys.json",
           "auth-config.json"
         ]
       }
@@ -102,6 +100,15 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Local Transcriber"
-    }
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/AhmadNedal/LocalWhisper/releases/latest/download"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

@@ -24,12 +24,25 @@ export type AuthFailure = { ok: false; code: string; status?: number; message?: 
 
 export type AuthLoginResult = { ok: true; user: AuthUser } | AuthFailure;
 
+export /** Automatic updates of the installed app (GitHub Releases). */
+export interface UpdateState {
+  status: "disabled" | "idle" | "checking" | "none" | "available" | "downloading" | "ready" | "error";
+  current: string;
+  version: string | null;
+  progress: number;
+  error: string | null;
+  checkedAt: number | null;
+  manual: boolean;
+}
+
 export interface AuthOptions {
   allowRegistration: boolean;
   minPasswordLength: number;
   /** A 6-digit code is e-mailed before the account is created. */
   requireEmailVerification: boolean;
   resendSeconds: number;
+  /** The service supports "forgot password" (e-mailed reset code). */
+  passwordReset?: boolean;
   reachable: boolean;
 }
 
@@ -97,6 +110,13 @@ export interface DesktopBridge {
   onLogAlert?(callback: (level: string) => void): () => void;
   setOpenAtLogin?(on: boolean): Promise<boolean>;
   authRegister?(details: RegisterDetails): Promise<AuthLoginResult>;
+  liveSystemAudio?(): Promise<boolean>;
+  updateGet?(): Promise<UpdateState>;
+  updateCheck?(): Promise<UpdateState>;
+  updateInstall?(): Promise<boolean>;
+  onUpdateState?(callback: (state: UpdateState) => void): () => void;
+  authSendResetCode?(details: { email: string; lang?: string }): Promise<SendCodeResult>;
+  authResetPassword?(details: { email: string; code: string; password: string; remember?: boolean }): Promise<AuthLoginResult>;
   restartBackend(): Promise<BackendStatus>;
   onBackendStatus(callback: (status: BackendStatus) => void): () => void;
   openMediaDialog(): Promise<string | null>;
